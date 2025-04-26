@@ -47,13 +47,8 @@ func (r *RemoteSignatoryServer) Register() {
 	r.router.POST("/sign", r.Sign)
 }
 
-type RemoteSignRequest struct {
-	ReqJson    string `json:"req_json"`
-	AnchorCode string `json:"anchor_code"`
-}
-
 func (r *RemoteSignatoryServer) Sign(c *gin.Context) {
-	var req RemoteSignRequest
+	var req bilibili.RemoteSignRequest
 	err := c.BindJSON(&req)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -61,5 +56,10 @@ func (r *RemoteSignatoryServer) Sign(c *gin.Context) {
 	}
 	log.Println(req.AnchorCode, req.ReqJson)
 
-	c.JSON(200, gin.H{"signed": r.signatory.Sign(req.ReqJson)})
+	sign, err := r.signatory.Sign(req.ReqJson)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(200, gin.H{"signed": sign})
 }
