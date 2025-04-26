@@ -18,10 +18,16 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	var signatory bilibili.ISignatory
+	if akID != "" && akSecret != "" {
+		signatory = bilibili.NewLocalSignatory(akID, akSecret)
+	} else {
+		signatory = bilibili.NewRemoteSignatory("https://plusplus7.com:42376", akSecret)
+	}
 	bilibiliApp := bilibili.NewAppService(
 		int64(appID),
 		anchorCode,
-		bilibili.NewLocalSignatory(akID, akSecret),
+		signatory,
 	)
 	bilibiliChan := bilibiliApp.Spin()
 	s := server.NewLocalServer(game, bilibiliChan)

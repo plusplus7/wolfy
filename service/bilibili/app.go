@@ -119,7 +119,10 @@ func (a *AppService) endApp(gameId string, appId int64) (resp *BaseResp, err err
 
 // apiRequest http request demo方法
 func (a *AppService) apiRequest(reqJson, requestUrl string) (*BaseResp, error) {
-	header := a.signatory.Sign(reqJson)
+	header, err := a.signatory.Sign(reqJson)
+	if err != nil {
+		return nil, fmt.Errorf("sign err: %v", err)
+	}
 
 	req, err := http.NewRequest(
 		http.MethodPost,
