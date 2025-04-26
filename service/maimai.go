@@ -91,6 +91,21 @@ type MaimaiTicketMaster struct {
 	storage        *MaimaiStorage
 }
 
+func (t *MaimaiTicketMaster) ClearTickets(operator string) (string, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	if !t.checkPermission(operator, -1) {
+		return "", fmt.Errorf("管理员操作")
+	}
+	t.tickets = make([]*MaimaiTicket, 0)
+	err := t.saveCheckPoint()
+	if err != nil {
+		log.Fatalf("failed to save ticket check point %v", err)
+		return "", err
+	}
+	return "关闭成功", nil
+}
+
 const (
 	superAdmin = "主播"
 )
@@ -99,6 +114,9 @@ func (t *MaimaiTicketMaster) checkPermission(creator string, index int64) bool {
 	if index >= int64(len(t.tickets)) {
 		return false
 	}
+	if index == -1 {
+		return creator == superAdmin
+	}
 	return t.tickets[index].Creator == creator || creator == superAdmin
 }
 
@@ -106,7 +124,7 @@ func (t *MaimaiTicketMaster) FinishTicket(operator string, index int64) (string,
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
+		return "", fmt.Errorf("编号错误")
 	}
 	if index == -1 {
 		for i, ticket := range t.tickets {
@@ -118,7 +136,7 @@ func (t *MaimaiTicketMaster) FinishTicket(operator string, index int64) (string,
 	}
 
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 	t.tickets = append(t.tickets[:index], t.tickets[index+1:]...)
 	err := t.saveCheckPoint()
@@ -134,7 +152,7 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 	defer t.lock.Unlock()
 
 	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
+		return "", fmt.Errorf("编号错误")
 	}
 	if index == -1 {
 		for i, ticket := range t.tickets {
@@ -146,7 +164,7 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 	}
 
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 
 	newTicket := &MaimaiTicket{
@@ -167,7 +185,7 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
+		return "", fmt.Errorf("编号错误")
 	}
 	if index == -1 {
 		for i, ticket := range t.tickets {
@@ -178,7 +196,7 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 		}
 	}
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 	fmt.Println(t.tickets[index])
 	t.tickets[index].RotateLevel()

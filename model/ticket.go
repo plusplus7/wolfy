@@ -6,6 +6,7 @@ type ITicketMaster interface {
 	ForEachTicket(fn func(ITicket))
 	NextLevel(operator string, index int64) (string, error)
 	NextRank(operator string, index int64) (string, error)
+	ClearTickets(operator string) (string, error)
 }
 
 type ITicket interface {

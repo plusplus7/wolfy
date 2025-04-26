@@ -7,6 +7,10 @@ import (
 	"wolfy/service/bilibili"
 )
 
+const (
+	remoteSignatoryAddr = "https://plusplus7.com:42376"
+)
+
 func main() {
 	akID := os.Getenv("BILIBILI_AK_ID")
 	akSecret := os.Getenv("BILIBILI_AK_SECRET")
@@ -22,7 +26,7 @@ func main() {
 	if akID != "" && akSecret != "" {
 		signatory = bilibili.NewLocalSignatory(akID, akSecret)
 	} else {
-		signatory = bilibili.NewRemoteSignatory("https://plusplus7.com:42376", akSecret)
+		signatory = bilibili.NewRemoteSignatory(remoteSignatoryAddr, akSecret)
 	}
 	bilibiliApp := bilibili.NewAppService(
 		int64(appID),

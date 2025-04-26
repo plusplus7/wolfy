@@ -68,6 +68,8 @@ func (l *LocalServer) taskHandler(task *model.Task) (msg string, err error) {
 			msg, err = l.TicketMaster.NextRank(caller, index)
 		case model.CommandNextLevel:
 			msg, err = l.TicketMaster.NextLevel(caller, index)
+		case model.CommandClearTickets:
+			msg, err = l.TicketMaster.ClearTickets(caller)
 		}
 	}
 	if err != nil {
@@ -79,10 +81,12 @@ func (l *LocalServer) taskHandler(task *model.Task) (msg string, err error) {
 }
 
 const (
+	FrontendEventPick           = "pick"
 	FrontendEventClickCoverInfo = "click_cover_info"
 	FrontendEventClickGenreInfo = "click_genre_info"
 	FrontendEventClickSongInfo  = "click_song_info"
 	FrontendEventClickCreator   = "click_creator"
+	FrontendEventClearAllData   = "clear_all_data"
 )
 
 func (l *LocalServer) Event(c *gin.Context) {
@@ -95,6 +99,8 @@ func (l *LocalServer) Event(c *gin.Context) {
 	}
 	var command string
 	switch event {
+	case FrontendEventPick:
+		command = model.CommandPick
 	case FrontendEventClickCoverInfo:
 		command = model.CommandFinish
 	case FrontendEventClickGenreInfo:
@@ -103,6 +109,8 @@ func (l *LocalServer) Event(c *gin.Context) {
 		command = model.CommandNextLevel
 	case FrontendEventClickCreator:
 		command = model.CommandPick
+	case FrontendEventClearAllData:
+		command = model.CommandClearTickets
 	}
 
 	msg, err := l.taskHandler(&model.Task{
@@ -165,6 +173,40 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 	c.JSON(200, gin.H{"data": result})
 }
 
+func (l *LocalServer) GetMetadata(c *gin.Context) {
+	var result GetTicketsResponse
+	l.TicketMaster.ForEachTicket(func(ticket model.ITicket) {
+		result.Tickets = append(result.Tickets, TicketItem{
+			Title:     ticket.GetTitle(),
+			Keyword:   ticket.GetKeyword(),
+			Creator:   ticket.GetCreator(),
+			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
+			CoverInfo: ticket.GetCoverInfo(),
+			GenreInfo: ticket.GetGenreInfo(),
+			SongInfo:  ticket.GetSongInfo(),
+		})
+	})
+
+	c.JSON(200, gin.H{"data": result})
+}
+
+func (l *LocalServer) SetMetadata(c *gin.Context) {
+	var result GetTicketsResponse
+	l.TicketMaster.ForEachTicket(func(ticket model.ITicket) {
+		result.Tickets = append(result.Tickets, TicketItem{
+			Title:     ticket.GetTitle(),
+			Keyword:   ticket.GetKeyword(),
+			Creator:   ticket.GetCreator(),
+			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
+			CoverInfo: ticket.GetCoverInfo(),
+			GenreInfo: ticket.GetGenreInfo(),
+			SongInfo:  ticket.GetSongInfo(),
+		})
+	})
+
+	c.JSON(200, gin.H{"data": result})
+}
+
 func (l *LocalServer) Register() {
 	l.router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:3000"},
@@ -183,6 +225,8 @@ func (l *LocalServer) Register() {
 	l.router.GET("/event/:caller/:event/:content", l.Event)
 	l.router.GET("/messages", l.Message)
 	l.router.GET("/tickets", l.Tickets)
+	l.router.GET("/metadata", l.GetMetadata)
+	l.router.POST("/metadata", l.SetMetadata)
 }
 
 func (l *LocalServer) Spin() {

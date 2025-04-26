@@ -1,10 +1,11 @@
 package model
 
 const (
-	CommandPick      = "pick"
-	CommandFinish    = "finish"
-	CommandNextLevel = "next_level"
-	CommandNextRank  = "next_rank"
+	CommandPick         = "pick"
+	CommandFinish       = "finish"
+	CommandNextLevel    = "next_level"
+	CommandNextRank     = "next_rank"
+	CommandClearTickets = "clear_tickets"
 )
 
 type Task struct {

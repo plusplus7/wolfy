@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
 	fuzz "github.com/paul-mannino/go-fuzzywuzzy"
 	"os"
 	"sort"
@@ -68,12 +67,6 @@ func (s *MaimaiStorage) rankRecord(keyword string) []*item {
 			return result[i].score > result[j].score
 		}
 	})
-	for i, r := range result {
-		fmt.Println(r.score, r.id, s.records[r.id].Title)
-		if i > 20 {
-			break
-		}
-	}
 
 	return result
 }
