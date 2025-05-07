@@ -1,9 +1,12 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"log"
+	"net/http"
 	"strconv"
 	"time"
 	"wolfy/model"
@@ -11,48 +14,56 @@ import (
 )
 
 type LocalServer struct {
-	TicketMaster   model.ITicketMaster
-	MessageManager *model.MessageManager
-	router         *gin.Engine
+	TicketMaster    model.ITicketMaster
+	MessageManager  *model.MessageManager
+	MetadataManager *model.SystemInfoManager
+	server          *http.Server
 
 	taskChan chan *model.Task
+	sysChan  chan model.SystemEvent
 	game     string
 }
 
-func NewLocalServer(game string, taskChan chan *model.Task) *LocalServer {
+func NewLocalServer() *LocalServer {
+	return &LocalServer{}
+}
+
+func (l *LocalServer) Init(manager *model.SystemInfoManager) (string, error) {
+	if manager == nil {
+		return "", fmt.Errorf("manager is nil")
+	}
 
 	localTicketsCheckPointPath := "./runtime/tickets.checkpoint.json"
 	localMessagesCheckPointPath := "./runtime/messages.checkpoint.json"
-	localSongDBPath := "./static/" + game + "/songs.json"
+	localSongDBPath := "./static/" + manager.Get().Game + "/songs.json"
 
-	l := &LocalServer{
-		game:           game,
-		router:         gin.Default(),
-		TicketMaster:   service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12),
-		MessageManager: model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second),
-		taskChan:       taskChan,
-	}
-	l.Register()
-	if l.taskChan != nil {
-		go l.taskRoutine(l.taskChan)
-	}
+	l.server = l.Register()
+	l.TicketMaster = service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12)
+	l.MessageManager = model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second)
+	l.MetadataManager = manager
+	l.game = manager.Get().Game
 
-	return l
+	return "ready to spin", nil
 }
 
-func (l *LocalServer) taskRoutine(tasker chan *model.Task) {
+func (l *LocalServer) taskRoutine(ctx context.Context, tasker chan *model.Task) {
 	for {
-		task := <-tasker
-		if task == nil { // shutdown
-			break
-		}
-		_, err := l.taskHandler(task)
-		if err != nil {
+		select {
+		case task := <-tasker:
+			_, err := l.taskHandler(task)
+			if err != nil {
+				log.Printf("task handle err %v", err)
+			}
+		case <-ctx.Done():
 			return
 		}
 	}
 }
+
 func (l *LocalServer) taskHandler(task *model.Task) (msg string, err error) {
+	if task == nil {
+		return "", nil
+	}
 	var cmd = task.Command
 	var caller = task.Caller
 	var content = task.Content
@@ -86,6 +97,7 @@ const (
 	FrontendEventClickGenreInfo = "click_genre_info"
 	FrontendEventClickSongInfo  = "click_song_info"
 	FrontendEventClickCreator   = "click_creator"
+	FrontendEventReboot         = "reboot"
 	FrontendEventClearAllData   = "clear_all_data"
 )
 
@@ -111,6 +123,8 @@ func (l *LocalServer) Event(c *gin.Context) {
 		command = model.CommandPick
 	case FrontendEventClearAllData:
 		command = model.CommandClearTickets
+	case FrontendEventReboot:
+		l.sysChan <- model.SystemReboot
 	}
 
 	msg, err := l.taskHandler(&model.Task{
@@ -173,45 +187,32 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 	c.JSON(200, gin.H{"data": result})
 }
 
-func (l *LocalServer) GetMetadata(c *gin.Context) {
-	var result GetTicketsResponse
-	l.TicketMaster.ForEachTicket(func(ticket model.ITicket) {
-		result.Tickets = append(result.Tickets, TicketItem{
-			Title:     ticket.GetTitle(),
-			Keyword:   ticket.GetKeyword(),
-			Creator:   ticket.GetCreator(),
-			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
-			CoverInfo: ticket.GetCoverInfo(),
-			GenreInfo: ticket.GetGenreInfo(),
-			SongInfo:  ticket.GetSongInfo(),
-		})
-	})
-
-	c.JSON(200, gin.H{"data": result})
+func (l *LocalServer) Metadata(c *gin.Context) {
+	c.JSON(200, gin.H{"data": l.MetadataManager.Get()})
 }
 
 func (l *LocalServer) SetMetadata(c *gin.Context) {
-	var result GetTicketsResponse
-	l.TicketMaster.ForEachTicket(func(ticket model.ITicket) {
-		result.Tickets = append(result.Tickets, TicketItem{
-			Title:     ticket.GetTitle(),
-			Keyword:   ticket.GetKeyword(),
-			Creator:   ticket.GetCreator(),
-			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
-			CoverInfo: ticket.GetCoverInfo(),
-			GenreInfo: ticket.GetGenreInfo(),
-			SongInfo:  ticket.GetSongInfo(),
-		})
-	})
+	var req model.SystemInfo
+	if err := c.ShouldBind(&req); err != nil {
+		c.JSON(400, gin.H{"msg": err.Error()})
+		return
+	}
 
-	c.JSON(200, gin.H{"data": result})
+	err := l.MetadataManager.Save(req)
+	if err != nil {
+		c.JSON(400, gin.H{"msg": err.Error()})
+		return
+	}
+	l.sysChan <- model.SystemReboot
+	c.JSON(200, gin.H{"data": "ok"})
 }
 
-func (l *LocalServer) Register() {
-	l.router.Use(cors.New(cors.Config{
+func (l *LocalServer) Register() *http.Server {
+	router := gin.Default()
+	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:3000"},
-		AllowMethods:     []string{"GET", "PUT", "PATCH"},
-		AllowHeaders:     []string{"Origin"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH"},
+		AllowHeaders:     []string{"Origin", "Content-Type"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		AllowOriginFunc: func(origin string) bool {
@@ -221,18 +222,44 @@ func (l *LocalServer) Register() {
 		MaxAge: 12 * time.Hour,
 	}))
 
-	l.router.Static("/static", "./static")
-	l.router.GET("/event/:caller/:event/:content", l.Event)
-	l.router.GET("/messages", l.Message)
-	l.router.GET("/tickets", l.Tickets)
-	l.router.GET("/metadata", l.GetMetadata)
-	l.router.POST("/metadata", l.SetMetadata)
+	router.Static("/static", "./static")
+	router.GET("/event/:caller/:event/:content", l.Event)
+	router.GET("/messages", l.Message)
+	router.GET("/tickets", l.Tickets)
+	router.GET("/metadata", l.Metadata)
+	router.POST("/metadata", l.SetMetadata)
+	return &http.Server{
+		Addr:    ":41377",
+		Handler: router,
+	}
 }
 
-func (l *LocalServer) Spin() {
-	err := l.router.Run("[::]:41377")
+func (l *LocalServer) Spin(ctx context.Context, taskChan chan *model.Task, sysChan chan model.SystemEvent) (string, error) {
+	l.taskChan = taskChan
+	l.sysChan = sysChan
 
-	if err != nil {
-		panic(err)
+	if l.taskChan != nil {
+		go l.taskRoutine(ctx, taskChan)
 	}
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("LocalServer app shutting down")
+				err := l.server.Shutdown(ctx)
+				if err != nil {
+					log.Printf("LocalServer server shutdown error %v\n", err)
+				}
+				return
+			}
+		}
+	}()
+	go func() {
+		err := l.server.ListenAndServe()
+		if err != nil {
+			log.Println(err)
+		}
+	}()
+	return "spinning", nil
 }

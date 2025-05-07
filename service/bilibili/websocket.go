@@ -2,6 +2,7 @@ package bilibili
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"github.com/gorilla/websocket"
@@ -63,7 +64,7 @@ type AuthRespParam struct {
 }
 
 // StartWebsocket 启动长连
-func StartWebsocket(wsAddr, authBody string, taskChan chan *model.Task) (err error) {
+func StartWebsocket(ctx context.Context, wsAddr, authBody string, taskChan chan *model.Task) (err error) {
 	// 建立连接
 	conn, _, err := websocket.DefaultDialer.Dial(wsAddr, nil)
 	if err != nil {
@@ -88,52 +89,65 @@ func StartWebsocket(wsAddr, authBody string, taskChan chan *model.Task) (err err
 	}
 
 	// 读取信息
-	go wc.ReadMsg()
+	go wc.ReadMsg(ctx)
 
 	// 处理信息
-	go wc.DoEvent()
+	go wc.DoEvent(ctx)
 
 	return
 }
 
 // ReadMsg 读取长连信息
-func (wc *WebsocketClient) ReadMsg() {
+func (wc *WebsocketClient) ReadMsg(ctx context.Context) {
 	for {
-		retProto := &Proto{}
-		_, buf, err := wc.conn.ReadMessage()
-		if err != nil {
-			log.Println("[WebsocketClient | ReadMsg] err:", err.Error())
-			continue
+		select {
+		case <-ctx.Done():
+			log.Println("[WebsocketClient | ReadMsg] ctx done")
+			err := wc.conn.Close()
+			if err != nil {
+				log.Fatalf("[WebsocketClient | ReadMsg] ctx done: failed to close connection %v", err)
+			}
+			return
+		default:
+			retProto := &Proto{}
+			_, buf, err := wc.conn.ReadMessage()
+			if err != nil {
+				log.Println("[WebsocketClient | ReadMsg] err:", err.Error())
+				continue
+			}
+			retProto.PacketLength = int32(binary.BigEndian.Uint32(buf[PackOffset:HeaderOffset]))
+			retProto.HeaderLength = int16(binary.BigEndian.Uint16(buf[HeaderOffset:VerOffset]))
+			retProto.Version = int16(binary.BigEndian.Uint16(buf[VerOffset:OperationOffset]))
+			retProto.Operation = int32(binary.BigEndian.Uint32(buf[OperationOffset:SeqIdOffset]))
+			retProto.SequenceId = int32(binary.BigEndian.Uint32(buf[SeqIdOffset:]))
+			if retProto.PacketLength < 0 || retProto.PacketLength > MaxPackSize {
+				continue
+			}
+			if retProto.HeaderLength != RawHeaderSize {
+				continue
+			}
+			if bodyLen := int(retProto.PacketLength - int32(retProto.HeaderLength)); bodyLen > 0 {
+				retProto.Body = buf[retProto.HeaderLength:retProto.PacketLength]
+			} else {
+				continue
+			}
+			retProto.BodyMuti = [][]byte{retProto.Body}
+			if len(retProto.BodyMuti) > 0 {
+				retProto.Body = retProto.BodyMuti[0]
+			}
+			wc.msgBuf <- retProto
 		}
-		retProto.PacketLength = int32(binary.BigEndian.Uint32(buf[PackOffset:HeaderOffset]))
-		retProto.HeaderLength = int16(binary.BigEndian.Uint16(buf[HeaderOffset:VerOffset]))
-		retProto.Version = int16(binary.BigEndian.Uint16(buf[VerOffset:OperationOffset]))
-		retProto.Operation = int32(binary.BigEndian.Uint32(buf[OperationOffset:SeqIdOffset]))
-		retProto.SequenceId = int32(binary.BigEndian.Uint32(buf[SeqIdOffset:]))
-		if retProto.PacketLength < 0 || retProto.PacketLength > MaxPackSize {
-			continue
-		}
-		if retProto.HeaderLength != RawHeaderSize {
-			continue
-		}
-		if bodyLen := int(retProto.PacketLength - int32(retProto.HeaderLength)); bodyLen > 0 {
-			retProto.Body = buf[retProto.HeaderLength:retProto.PacketLength]
-		} else {
-			continue
-		}
-		retProto.BodyMuti = [][]byte{retProto.Body}
-		if len(retProto.BodyMuti) > 0 {
-			retProto.Body = retProto.BodyMuti[0]
-		}
-		wc.msgBuf <- retProto
 	}
 }
 
 // DoEvent 处理信息
-func (wc *WebsocketClient) DoEvent() {
+func (wc *WebsocketClient) DoEvent(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 5)
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("[WebsocketClient | DoEvent] ctx done")
+			return
 		case p := <-wc.msgBuf:
 			if p == nil {
 				continue

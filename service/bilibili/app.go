@@ -2,97 +2,122 @@ package bilibili
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 	"wolfy/model"
+	"wolfy/service"
 )
 
 type AppService struct {
-	AppId      int64
+	AppID      int64
+	GameID     string
 	AnchorCode string
 	signatory  ISignatory
-	taskChan   chan *model.Task
+	sys        *model.SystemInfoManager
 }
 
-func NewAppService(appId int64, anchorCode string, signatory ISignatory) *AppService {
-	return &AppService{
-		AppId:      appId,
-		AnchorCode: anchorCode,
-		signatory:  signatory,
-		taskChan:   make(chan *model.Task),
+func NewAppService() service.IService {
+	return &AppService{}
+}
+
+func (a *AppService) Init(sys *model.SystemInfoManager) (string, error) {
+	info := sys.Get()
+	if info.AppID == 0 || info.AnchorCode == "" {
+		return "", fmt.Errorf("app id, game or anchor code is empty")
+	}
+	a.AppID = info.AppID
+	a.AnchorCode = info.AnchorCode
+	a.GameID = info.BilibiliGameID
+	a.sys = sys
+
+	if info.BilibiliAccessKey != "" && info.BilibiliAccessSecret != "" {
+		a.signatory = NewLocalSignatory(info.BilibiliAccessKey, info.BilibiliAccessSecret)
+		return "running with local signatory", nil
+	} else {
+		a.signatory = NewRemoteSignatory(info.RemoteSignatoryAddr, a.AnchorCode)
+		return "running with remote signatory", nil
 	}
 }
-func (a *AppService) Spin() chan *model.Task {
+
+func (a *AppService) tryEndApp() {
+	if a.GameID == "" || a.AppID == 0 {
+		return
+	}
+	_, err := a.endApp(a.GameID, a.AppID)
+	if err != nil {
+		log.Println("error when shutting down", err)
+	} else {
+		info := a.sys.Get()
+		info.BilibiliGameID = ""
+		err = a.sys.Save(info)
+		if err != nil {
+			log.Println("error when saving metadata", err)
+		}
+	}
+}
+
+func (a *AppService) Spin(ctx context.Context, taskChan chan *model.Task, _ chan model.SystemEvent) (string, error) {
+	if a.GameID != "" {
+		log.Printf("try end app %s\n", a.GameID)
+		a.tryEndApp()
+	}
+
 	resp, err := a.startApp()
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	startAppRespData := &StartAppRespData{}
 	err = json.Unmarshal(resp.Data, &startAppRespData)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
 	if startAppRespData == nil {
-		log.Println("start app get msg err")
-		return nil
+		return "", fmt.Errorf("failed to get app start message %v %v", *resp, err)
 	}
 
 	if len(startAppRespData.WebsocketInfo.WssLink) == 0 {
-		return nil
+		return "", fmt.Errorf("failed to get websocket link")
 	}
 
-	go func(gameId string) {
-		for {
-			time.Sleep(time.Second * 20)
-			_, _ = a.appHeart(gameId)
-		}
-	}(startAppRespData.GameInfo.GameId)
-
-	// 开启长连
-	err = StartWebsocket(
-		startAppRespData.WebsocketInfo.WssLink[0],
-		startAppRespData.WebsocketInfo.AuthBody,
-		a.taskChan)
-	if err != nil {
-		fmt.Println(err)
-		return nil
-	}
-
-	// 退出
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	a.GameID = startAppRespData.GameInfo.GameId
 	go func() {
 		for {
-			s := <-c
-			switch s {
-			case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
-				log.Println("WebsocketClient exit")
-				break
-			case syscall.SIGHUP:
+			select {
+			case <-ctx.Done():
+				log.Println("app shutting down")
+				a.tryEndApp()
+				log.Println("app shutting down done")
+				return
 			default:
-				break
-			}
-			//关闭应用
-			_, err = a.endApp(startAppRespData.GameInfo.GameId, a.AppId)
-			if err != nil {
-				panic(err)
+				time.Sleep(time.Second * 20)
+				_, _ = a.appHeart(a.GameID)
 			}
 		}
 	}()
-	return a.taskChan
+
+	log.Println("start app websocket")
+	// 开启长连
+	err = StartWebsocket(
+		ctx,
+		startAppRespData.WebsocketInfo.WssLink[0],
+		startAppRespData.WebsocketInfo.AuthBody,
+		taskChan)
+	if err != nil {
+		return "", fmt.Errorf("failed to start websocket")
+	}
+
+	return "spinning", nil
 }
 
 func (a *AppService) startApp() (resp *BaseResp, err error) {
 	startAppReq := StartAppRequest{
 		Code:  a.AnchorCode,
-		AppId: a.AppId,
+		AppId: a.AppID,
 	}
 	reqJson, _ := json.Marshal(startAppReq)
 	return a.apiRequest(string(reqJson), "/v2/app/start")

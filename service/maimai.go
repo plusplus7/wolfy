@@ -198,9 +198,7 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 	if !t.checkPermission(operator, index) {
 		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
-	fmt.Println(t.tickets[index])
 	t.tickets[index].RotateLevel()
-	fmt.Println(t.tickets[index])
 	err := t.saveCheckPoint()
 	if err != nil {
 		return "", err

@@ -9,7 +9,7 @@ import (
 
 type MaimaiStorage struct {
 	filePath string
-	records  map[string]*MaimaiRecord
+	Records  map[string]*MaimaiRecord
 }
 
 type item struct {
@@ -27,7 +27,7 @@ func NewMaimaiStorage(filePath string) *MaimaiStorage {
 		filePath: filePath,
 	}
 
-	err = json.Unmarshal(file, &res.records)
+	err = json.Unmarshal(file, &res.Records)
 	if err != nil {
 		panic(err)
 	}
@@ -36,14 +36,14 @@ func NewMaimaiStorage(filePath string) *MaimaiStorage {
 }
 
 func (s *MaimaiStorage) PickOne(keyword string, rank int) *MaimaiRecord {
-	rankList := s.rankRecord(keyword)
-	return s.records[rankList[rank%len(rankList)].id]
+	rankList := s.RankRecord(keyword)
+	return s.Records[rankList[rank%len(rankList)].id]
 }
 
-func (s *MaimaiStorage) rankRecord(keyword string) []*item {
+func (s *MaimaiStorage) RankRecord(keyword string) []*item {
 
-	var result = make([]*item, 0, len(s.records))
-	for id, record := range s.records {
+	var result = make([]*item, 0, len(s.Records))
+	for id, record := range s.Records {
 		highScore := -1
 		for _, alias := range record.Alias {
 			score := fuzz.Ratio(alias, keyword)
