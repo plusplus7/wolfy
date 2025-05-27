@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"wolfy/model"
 )
@@ -86,9 +87,10 @@ type MaimaiTicketMaster struct {
 	lock    sync.RWMutex
 	tickets []*MaimaiTicket
 
-	maxTicketSize  int
-	checkPointPath string
-	storage        *MaimaiStorage
+	maxTicketSize                  int
+	maxAllowedTicketsForOneCreator int
+	checkPointPath                 string
+	storage                        *MaimaiStorage
 }
 
 func (t *MaimaiTicketMaster) ClearTickets(operator string) (string, error) {
@@ -100,7 +102,7 @@ func (t *MaimaiTicketMaster) ClearTickets(operator string) (string, error) {
 	t.tickets = make([]*MaimaiTicket, 0)
 	err := t.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save ticket check point %v", err)
+		log.Printf("failed to save ticket check point %v", err)
 		return "", err
 	}
 	return "关闭成功", nil
@@ -141,7 +143,7 @@ func (t *MaimaiTicketMaster) FinishTicket(operator string, index int64) (string,
 	t.tickets = append(t.tickets[:index], t.tickets[index+1:]...)
 	err := t.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save ticket check point %v", err)
+		log.Printf("failed to save ticket check point %v", err)
 		return "", err
 	}
 	return "关闭成功", nil
@@ -167,14 +169,18 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 
+	record, err := t.SmartPick(t.tickets[index].Keyword, t.tickets[index].Rank+1)
+	if err != nil {
+		return "", err
+	}
 	newTicket := &MaimaiTicket{
 		Keyword: t.tickets[index].Keyword,
 		Creator: t.tickets[index].Creator,
-		Record:  t.storage.PickOne(t.tickets[index].Keyword, t.tickets[index].Rank+1),
+		Record:  record,
 		Rank:    t.tickets[index].Rank + 1,
 	}
 	t.tickets[index] = newTicket
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
 		return "", err
 	}
@@ -207,12 +213,13 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 }
 
 func NewMaimaiTicketMaster(songDatabasePath string, checkPointPath string,
-	maxTicketSize int) *MaimaiTicketMaster {
+	maxTicketSize int, maxAllowedTickets int) *MaimaiTicketMaster {
 	t := &MaimaiTicketMaster{
-		lock:           sync.RWMutex{},
-		maxTicketSize:  maxTicketSize,
-		checkPointPath: checkPointPath,
-		storage:        NewMaimaiStorage(songDatabasePath),
+		lock:                           sync.RWMutex{},
+		maxTicketSize:                  maxTicketSize,
+		maxAllowedTicketsForOneCreator: maxAllowedTickets,
+		checkPointPath:                 checkPointPath,
+		storage:                        NewMaimaiStorage(songDatabasePath),
 	}
 
 	if ok := t.loadCheckPoint(); ok != nil {
@@ -267,18 +274,95 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 	if len(t.tickets) >= t.maxTicketSize {
 		return "", errors.New("歌单已满~")
 	}
+	count := 0
+	t.ForEachTicket(func(ticket model.ITicket) {
+		if ticket.GetCreator() == creator {
+			count++
+		}
+	})
+	if count >= t.maxAllowedTicketsForOneCreator {
+		return "", fmt.Errorf("已经点了%d首歌了，待会儿再点吧", t.maxAllowedTicketsForOneCreator)
+	}
+
+	record, err := t.SmartPick(keyword, 0)
+	if err != nil {
+		return "", err
+	}
+
 	t.tickets = append(t.tickets, &MaimaiTicket{
 		Keyword: keyword,
 		Creator: creator,
-		Record:  t.storage.PickOne(keyword, 0),
+		Record:  record,
 		Rank:    0,
 	})
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save ticket check point %v", err)
+		log.Printf("failed to save ticket check point %v", err)
 		return "", err
 	}
 	return "成功！", nil
+}
+
+func (t *MaimaiTicketMaster) SmartPick(input string, rank int) (*MaimaiRecord, error) {
+	if input == "" {
+		return nil, errors.New("关键字不能为空")
+	}
+	specifiedTrackType := func(keyword string) (string, string) {
+		trackTypeMapping := map[string]string{
+			"标准":   "std",
+			"标准谱":  "std",
+			"STD":  "std",
+			"std":  "std",
+			"DX":   "dx",
+			"dx":   "dx",
+			"STD谱": "std",
+			"std谱": "std",
+			"DX谱":  "dx",
+			"dx谱":  "dx",
+		}
+		for k, v := range trackTypeMapping {
+			if strings.HasPrefix(keyword, k) || strings.HasSuffix(keyword, k) {
+				return v, strings.Trim(keyword, k)
+			}
+		}
+
+		return "", keyword
+	}
+	specifiedTrackLevel := func(keyword string) (int, string) {
+		levelKey := []string{"白", "紫", "红", "绿", "黄"}
+		for i, lk := range levelKey {
+			if strings.HasPrefix(keyword, lk) {
+				keyword = strings.TrimPrefix(keyword, lk)
+				return i, keyword
+			}
+			if strings.HasSuffix(keyword, lk) {
+				keyword = strings.TrimSuffix(keyword, lk)
+				return i, keyword
+			}
+		}
+		return -1, keyword
+	}
+	var trackType = ""
+	var trackLevel int
+	var keyword string
+
+	trackType, keyword = specifiedTrackType(input)
+	var record MaimaiRecord
+	if t.storage.RankRecord(keyword)[0].score >= 100 {
+		record = *t.storage.PickOneWithTrackType(keyword, rank, trackType)
+	} else {
+		trackLevel, keyword = specifiedTrackLevel(keyword)
+		if trackType == "" {
+			trackType, keyword = specifiedTrackType(keyword)
+		}
+
+		record = *t.storage.PickOneWithTrackType(keyword, 0, trackType)
+		if trackLevel != -1 {
+			record.CurrentLevel = len(record.Levels) - 5 + trackLevel
+		}
+	}
+
+	return &record, nil
 }
 
 func (t *MaimaiTicketMaster) ForEachTicket(fn func(ticket model.ITicket)) {

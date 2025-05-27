@@ -6,18 +6,22 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"log"
+	"net"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 	"wolfy/model"
 	"wolfy/service"
 )
 
 type LocalServer struct {
-	TicketMaster    model.ITicketMaster
-	MessageManager  *model.MessageManager
-	MetadataManager *model.SystemInfoManager
-	server          *http.Server
+	TicketMaster   model.ITicketMaster
+	MessageManager *model.MessageManager
+	SysInfoManager *model.SystemInfoManager
+	server         *http.Server
 
 	taskChan chan *model.Task
 	sysChan  chan model.SystemEvent
@@ -38,9 +42,9 @@ func (l *LocalServer) Init(manager *model.SystemInfoManager) (string, error) {
 	localSongDBPath := "./static/" + manager.Get().Game + "/songs.json"
 
 	l.server = l.Register()
-	l.TicketMaster = service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12)
+	l.TicketMaster = service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12, 3)
 	l.MessageManager = model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second)
-	l.MetadataManager = manager
+	l.SysInfoManager = manager
 	l.game = manager.Get().Game
 
 	return "ready to spin", nil
@@ -187,18 +191,18 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 	c.JSON(200, gin.H{"data": result})
 }
 
-func (l *LocalServer) Metadata(c *gin.Context) {
-	c.JSON(200, gin.H{"data": l.MetadataManager.Get()})
+func (l *LocalServer) SysInfo(c *gin.Context) {
+	c.JSON(200, gin.H{"data": l.SysInfoManager.Get()})
 }
 
-func (l *LocalServer) SetMetadata(c *gin.Context) {
+func (l *LocalServer) SetSysInfo(c *gin.Context) {
 	var req model.SystemInfo
 	if err := c.ShouldBind(&req); err != nil {
 		c.JSON(400, gin.H{"msg": err.Error()})
 		return
 	}
 
-	err := l.MetadataManager.Save(req)
+	err := l.SysInfoManager.Save(req)
 	if err != nil {
 		c.JSON(400, gin.H{"msg": err.Error()})
 		return
@@ -223,13 +227,19 @@ func (l *LocalServer) Register() *http.Server {
 	}))
 
 	router.Static("/static", "./static")
-	router.GET("/event/:caller/:event/:content", l.Event)
-	router.GET("/messages", l.Message)
-	router.GET("/tickets", l.Tickets)
-	router.GET("/metadata", l.Metadata)
-	router.POST("/metadata", l.SetMetadata)
+	router.NoRoute(func(c *gin.Context) {
+		if !strings.HasPrefix(c.Request.RequestURI, "/api") && !strings.HasPrefix(c.Request.RequestURI, "/static") {
+			c.File("./static/index.html")
+		}
+		//default 404 page not found
+	})
+	router.GET("/api/event/:caller/:event/:content", l.Event)
+	router.GET("/api/messages", l.Message)
+	router.GET("/api/tickets", l.Tickets)
+	router.GET("/api/sysinfo", l.SysInfo)
+	router.POST("/api/sysinfo", l.SetSysInfo)
+
 	return &http.Server{
-		Addr:    ":41377",
 		Handler: router,
 	}
 }
@@ -255,11 +265,42 @@ func (l *LocalServer) Spin(ctx context.Context, taskChan chan *model.Task, sysCh
 			}
 		}
 	}()
+
+	var listener net.Listener
+	var err error
+	if listener, err = net.Listen("tcp", ":53427"); err != nil {
+		listener, err = net.Listen("tcp", ":0")
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	log.Printf("LocalServer listening on %v\n", listener.Addr())
 	go func() {
-		err := l.server.ListenAndServe()
+		err = l.server.Serve(listener)
+
 		if err != nil {
 			log.Println(err)
 		}
 	}()
-	return "spinning", nil
+	OpenBrowser("http://localhost:" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/static")
+	return "http://localhost:" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/stage", nil
+}
+
+func OpenBrowser(url string) {
+	var err error
+
+	switch runtime.GOOS {
+	case "linux":
+		err = exec.Command("xdg-open", url).Start()
+	case "windows":
+		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		err = exec.Command("open", url).Start()
+	default:
+		err = fmt.Errorf("unsupported platform")
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
 }

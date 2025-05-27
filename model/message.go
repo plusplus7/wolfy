@@ -87,7 +87,7 @@ func (m *MessageManager) Push(message string) {
 
 	err := m.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save check point %v", err)
+		log.Printf("failed to save check point %v", err)
 	}
 }
 

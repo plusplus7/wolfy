@@ -19,8 +19,8 @@ const (
 )
 
 type ServiceInfo struct {
-	info string
-	err  error
+	Info string `json:"info"`
+	Err  string `json:"err"`
 }
 
 type SystemInfo struct {
@@ -89,10 +89,14 @@ func (m *SystemInfoManager) SetServiceInfo(serviceName, status string, sysErr er
 	defer m.lock.Unlock()
 
 	get := m.Get()
-	get.ServiceInfo[serviceName] = ServiceInfo{status, sysErr}
+	var errStr string
+	if sysErr != nil {
+		errStr = sysErr.Error()
+	}
+	get.ServiceInfo[serviceName] = ServiceInfo{status, errStr}
 	err := m.save(get)
 	if err != nil {
-		log.Fatalf("Failed to save system info: %v", err)
+		log.Printf("Failed to save system info: %v", err)
 		return
 	}
 

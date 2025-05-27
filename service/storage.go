@@ -37,7 +37,26 @@ func NewMaimaiStorage(filePath string) *MaimaiStorage {
 
 func (s *MaimaiStorage) PickOne(keyword string, rank int) *MaimaiRecord {
 	rankList := s.RankRecord(keyword)
-	return s.Records[rankList[rank%len(rankList)].id]
+	record := *s.Records[rankList[rank%len(rankList)].id]
+	return &record
+}
+
+func (s *MaimaiStorage) PickOneWithTrackType(keyword string, rank int, chartType string) *MaimaiRecord {
+	if rank != 0 || chartType == "" {
+		return s.PickOne(keyword, rank)
+	}
+	rankList := s.RankRecord(keyword)
+	hScore := rankList[0].score
+	for _, r := range rankList {
+		if r.score != hScore {
+			break
+		}
+		record := *s.Records[r.id]
+		if record.GetTrackType() == chartType {
+			return &record
+		}
+	}
+	return s.Records[rankList[0].id]
 }
 
 func (s *MaimaiStorage) RankRecord(keyword string) []*item {

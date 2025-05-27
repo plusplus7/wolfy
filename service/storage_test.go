@@ -11,5 +11,4 @@ func TestStorageRank(t *testing.T) {
 	for i, r := range records {
 		fmt.Printf("%d,%s, %d\n", i, s.Records[r.id].Title, r.score)
 	}
-
 }
