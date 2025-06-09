@@ -25,7 +25,6 @@ type LocalServer struct {
 
 	taskChan chan *model.Task
 	sysChan  chan model.SystemEvent
-	game     string
 }
 
 func NewLocalServer() *LocalServer {
@@ -39,13 +38,12 @@ func (l *LocalServer) Init(manager *model.SystemInfoManager) (string, error) {
 
 	localTicketsCheckPointPath := "./runtime/tickets.checkpoint.json"
 	localMessagesCheckPointPath := "./runtime/messages.checkpoint.json"
-	localSongDBPath := "./static/" + manager.Get().Game + "/songs.json"
+	localSongDBPath := "./static/maimai/songs.json"
 
 	l.server = l.Register()
 	l.TicketMaster = service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12, 3)
 	l.MessageManager = model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second)
 	l.SysInfoManager = manager
-	l.game = manager.Get().Game
 
 	return "ready to spin", nil
 }
@@ -85,6 +83,8 @@ func (l *LocalServer) taskHandler(task *model.Task) (msg string, err error) {
 			msg, err = l.TicketMaster.NextLevel(caller, index)
 		case model.CommandClearTickets:
 			msg, err = l.TicketMaster.ClearTickets(caller)
+		default:
+			return "", nil
 		}
 	}
 	if err != nil {
@@ -102,6 +102,7 @@ const (
 	FrontendEventClickSongInfo  = "click_song_info"
 	FrontendEventClickCreator   = "click_creator"
 	FrontendEventReboot         = "reboot"
+	FrontendEventSetAnchorCode  = "set_anchor_code"
 	FrontendEventClearAllData   = "clear_all_data"
 )
 
@@ -113,7 +114,7 @@ func (l *LocalServer) Event(c *gin.Context) {
 	if err != nil {
 		index = -1
 	}
-	var command string
+	var command = ""
 	switch event {
 	case FrontendEventPick:
 		command = model.CommandPick
@@ -126,17 +127,28 @@ func (l *LocalServer) Event(c *gin.Context) {
 	case FrontendEventClickCreator:
 		command = model.CommandPick
 	case FrontendEventClearAllData:
-		command = model.CommandClearTickets
+	case FrontendEventSetAnchorCode:
+		info := l.SysInfoManager.Get()
+		info.AnchorCode = content
+		err = l.SysInfoManager.Save(info)
+		if err == nil {
+			l.sysChan <- model.SystemReboot
+		}
 	case FrontendEventReboot:
 		l.sysChan <- model.SystemReboot
 	}
 
-	msg, err := l.taskHandler(&model.Task{
-		Command: command,
-		Caller:  caller,
-		Content: content,
-		Index:   index,
-	})
+	var msg string
+	if command != "" {
+		msg, err = l.taskHandler(&model.Task{
+			Command: command,
+			Caller:  caller,
+			Content: content,
+			Index:   index,
+		})
+	} else {
+		msg = "ok"
+	}
 
 	if err == nil {
 		c.JSON(200, gin.H{"data": msg})
@@ -181,7 +193,7 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 			Title:     ticket.GetTitle(),
 			Keyword:   ticket.GetKeyword(),
 			Creator:   ticket.GetCreator(),
-			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
+			Image:     "//" + c.Request.Host + "/static/maimai/covers/" + ticket.GetCoverPath(),
 			CoverInfo: ticket.GetCoverInfo(),
 			GenreInfo: ticket.GetGenreInfo(),
 			SongInfo:  ticket.GetSongInfo(),
@@ -193,22 +205,6 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 
 func (l *LocalServer) SysInfo(c *gin.Context) {
 	c.JSON(200, gin.H{"data": l.SysInfoManager.Get()})
-}
-
-func (l *LocalServer) SetSysInfo(c *gin.Context) {
-	var req model.SystemInfo
-	if err := c.ShouldBind(&req); err != nil {
-		c.JSON(400, gin.H{"msg": err.Error()})
-		return
-	}
-
-	err := l.SysInfoManager.Save(req)
-	if err != nil {
-		c.JSON(400, gin.H{"msg": err.Error()})
-		return
-	}
-	l.sysChan <- model.SystemReboot
-	c.JSON(200, gin.H{"data": "ok"})
 }
 
 func (l *LocalServer) Register() *http.Server {
@@ -237,7 +233,6 @@ func (l *LocalServer) Register() *http.Server {
 	router.GET("/api/messages", l.Message)
 	router.GET("/api/tickets", l.Tickets)
 	router.GET("/api/sysinfo", l.SysInfo)
-	router.POST("/api/sysinfo", l.SetSysInfo)
 
 	return &http.Server{
 		Handler: router,
@@ -275,7 +270,7 @@ func (l *LocalServer) Spin(ctx context.Context, taskChan chan *model.Task, sysCh
 		}
 	}
 
-	log.Printf("LocalServer listening on %v\n", listener.Addr())
+	log.Printf("LocalServer listening on %v %v\n", listener.Addr(), GetLocalIP())
 	go func() {
 		err = l.server.Serve(listener)
 
@@ -283,8 +278,8 @@ func (l *LocalServer) Spin(ctx context.Context, taskChan chan *model.Task, sysCh
 			log.Println(err)
 		}
 	}()
-	OpenBrowser("http://localhost:" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/static")
-	return "http://localhost:" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/stage", nil
+	OpenBrowser("http://" + GetLocalIP() + ":" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/static")
+	return "http://" + GetLocalIP() + ":" + strconv.FormatInt(int64(listener.Addr().(*net.TCPAddr).Port), 10) + "/stage", nil
 }
 
 func OpenBrowser(url string) {
@@ -303,4 +298,20 @@ func OpenBrowser(url string) {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func GetLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, address := range addrs {
+		// check the address type and if it is not a loopback the display it
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return ""
 }

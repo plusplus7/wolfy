@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"wolfy/model"
 )
 
@@ -91,6 +93,7 @@ type MaimaiTicketMaster struct {
 	maxAllowedTicketsForOneCreator int
 	checkPointPath                 string
 	storage                        *MaimaiStorage
+	ticketLogger                   *slog.Logger
 }
 
 func (t *MaimaiTicketMaster) ClearTickets(operator string) (string, error) {
@@ -214,12 +217,19 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 
 func NewMaimaiTicketMaster(songDatabasePath string, checkPointPath string,
 	maxTicketSize int, maxAllowedTickets int) *MaimaiTicketMaster {
+
+	file, err := os.OpenFile("./log/"+strings.ReplaceAll(time.Now().Format(time.RFC3339)+".log", ":", "-"), os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		panic(err)
+		return nil
+	}
 	t := &MaimaiTicketMaster{
 		lock:                           sync.RWMutex{},
 		maxTicketSize:                  maxTicketSize,
 		maxAllowedTicketsForOneCreator: maxAllowedTickets,
 		checkPointPath:                 checkPointPath,
 		storage:                        NewMaimaiStorage(songDatabasePath),
+		ticketLogger:                   slog.New(slog.NewJSONHandler(file, nil)),
 	}
 
 	if ok := t.loadCheckPoint(); ok != nil {
@@ -272,20 +282,26 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 	defer t.lock.Unlock()
 
 	if len(t.tickets) >= t.maxTicketSize {
+		t.ticketLogger.Info("pick_failed", "creator", creator, "msg", "exceed limit")
 		return "", errors.New("歌单已满~")
 	}
-	count := 0
-	t.ForEachTicket(func(ticket model.ITicket) {
-		if ticket.GetCreator() == creator {
-			count++
+
+	{
+		count := 0
+		for _, ticket := range t.tickets {
+			if ticket.GetCreator() == creator {
+				count++
+			}
 		}
-	})
-	if count >= t.maxAllowedTicketsForOneCreator {
-		return "", fmt.Errorf("已经点了%d首歌了，待会儿再点吧", t.maxAllowedTicketsForOneCreator)
+		if count >= t.maxAllowedTicketsForOneCreator {
+			t.ticketLogger.Info("pick_failed", "creator", creator, "msg", "exceed limit for one creator")
+			return "", fmt.Errorf("已经点了%d首歌了，待会儿再点吧", t.maxAllowedTicketsForOneCreator)
+		}
 	}
 
 	record, err := t.SmartPick(keyword, 0)
 	if err != nil {
+		t.ticketLogger.Info("system_failed", "creator", creator, "msg", err.Error())
 		return "", err
 	}
 
@@ -295,6 +311,10 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 		Record:  record,
 		Rank:    0,
 	})
+	t.ticketLogger.Info("pick",
+		"creator", creator,
+		"title", record.Title, "category", record.Category, "rank", record.Rank,
+		"current", record.CurrentLevel)
 	err = t.saveCheckPoint()
 	if err != nil {
 		log.Printf("failed to save ticket check point %v", err)
@@ -356,9 +376,12 @@ func (t *MaimaiTicketMaster) SmartPick(input string, rank int) (*MaimaiRecord, e
 			trackType, keyword = specifiedTrackType(keyword)
 		}
 
-		record = *t.storage.PickOneWithTrackType(keyword, 0, trackType)
+		record = *t.storage.PickOneWithTrackType(keyword, rank, trackType)
 		if trackLevel != -1 {
 			record.CurrentLevel = len(record.Levels) - 5 + trackLevel
+			if record.CurrentLevel < 0 {
+				record.CurrentLevel = 0
+			}
 		}
 	}
 

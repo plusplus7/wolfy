@@ -27,7 +27,6 @@ type SystemInfo struct {
 	AnchorCode  string `json:"anchor_code"`
 	AppID       int64  `json:"app_id"`
 	SystemError string `json:"system_error"`
-	Game        string `json:"game"`
 
 	BilibiliGameID       string `json:"bilibili_game_id"`
 	BilibiliAccessKey    string `json:"bilibili_access_key"`
@@ -47,7 +46,6 @@ func NewSystemInfoManager() *SystemInfoManager {
 	err := m.LoadFromFile()
 	if err != nil {
 		m.metadata = SystemInfo{
-			Game:                "maimai",
 			AnchorCode:          "",
 			AppID:               1748453177364,
 			RemoteSignatoryAddr: "https://plusplus7.com:42376",
@@ -99,7 +97,6 @@ func (m *SystemInfoManager) SetServiceInfo(serviceName, status string, sysErr er
 		log.Printf("Failed to save system info: %v", err)
 		return
 	}
-
 }
 
 func (m *SystemInfoManager) save(metadata SystemInfo) error {
