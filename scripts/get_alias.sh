@@ -1,0 +1,1 @@
+curl --location 'https://maimai.lxns.net/api/v0/maimai/alias/list' > ../static/maimai/alias.json

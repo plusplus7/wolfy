@@ -13,6 +13,8 @@ func main() {
 	anchorCode := os.Getenv("ANCHOR_CODE")
 	appIDStr := os.Getenv("APP_ID")
 	game := os.Getenv("GAME")
+	songPackage := os.Getenv("SONG_PACKAGE_PATH")
+	aliasFile := os.Getenv("ALIAS_FILE_PATH")
 
 	appID, err := strconv.Atoi(appIDStr)
 	if err != nil {
@@ -30,6 +32,6 @@ func main() {
 		signatory,
 	)
 	bilibiliChan := bilibiliApp.Spin()
-	s := server.NewLocalServer(game, bilibiliChan)
+	s := server.NewLocalServer(game, songPackage, aliasFile, bilibiliChan)
 	s.Spin()
 }

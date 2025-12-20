@@ -19,16 +19,15 @@ type LocalServer struct {
 	game     string
 }
 
-func NewLocalServer(game string, taskChan chan *model.Task) *LocalServer {
+func NewLocalServer(game string, songDB string, aliasPath string, taskChan chan *model.Task) *LocalServer {
 
 	localTicketsCheckPointPath := "./runtime/tickets.checkpoint.json"
 	localMessagesCheckPointPath := "./runtime/messages.checkpoint.json"
-	localSongDBPath := "./static/" + game + "/songs.json"
 
 	l := &LocalServer{
 		game:           game,
 		router:         gin.Default(),
-		TicketMaster:   service.NewMaimaiTicketMaster(localSongDBPath, localTicketsCheckPointPath, 12),
+		TicketMaster:   service.NewMaimaiTicketMaster(songDB, aliasPath, localTicketsCheckPointPath, 12),
 		MessageManager: model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second),
 		taskChan:       taskChan,
 	}
@@ -83,6 +82,7 @@ const (
 	FrontendEventClickGenreInfo = "click_genre_info"
 	FrontendEventClickSongInfo  = "click_song_info"
 	FrontendEventClickCreator   = "click_creator"
+	FrontendEventPick           = "pick"
 )
 
 func (l *LocalServer) Event(c *gin.Context) {
@@ -101,6 +101,8 @@ func (l *LocalServer) Event(c *gin.Context) {
 		command = model.CommandNextRank
 	case FrontendEventClickSongInfo:
 		command = model.CommandNextLevel
+	case FrontendEventPick:
+		command = model.CommandPick
 	case FrontendEventClickCreator:
 		command = model.CommandPick
 	}
@@ -155,7 +157,7 @@ func (l *LocalServer) Tickets(c *gin.Context) {
 			Title:     ticket.GetTitle(),
 			Keyword:   ticket.GetKeyword(),
 			Creator:   ticket.GetCreator(),
-			Image:     "//" + c.Request.Host + "/static/" + l.game + "/covers/" + ticket.GetCoverPath(),
+			Image:     ticket.GetCoverPath(),
 			CoverInfo: ticket.GetCoverInfo(),
 			GenreInfo: ticket.GetGenreInfo(),
 			SongInfo:  ticket.GetSongInfo(),
@@ -180,9 +182,9 @@ func (l *LocalServer) Register() {
 	}))
 
 	l.router.Static("/static", "./static")
-	l.router.GET("/event/:caller/:event/:content", l.Event)
-	l.router.GET("/messages", l.Message)
-	l.router.GET("/tickets", l.Tickets)
+	l.router.GET("/api/event/:caller/:event/:content", l.Event)
+	l.router.GET("/api/messages", l.Message)
+	l.router.GET("/api/tickets", l.Tickets)
 }
 
 func (l *LocalServer) Spin() {

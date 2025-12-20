@@ -6,9 +6,18 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"wolfy/model"
 )
+
+type Aliases struct {
+	Alias []Alias `json:"aliases"`
+}
+type Alias struct {
+	SongID  int      `json:"song_id"`
+	Aliases []string `json:"aliases"`
+}
 
 type MaimaiLevel struct {
 	Type       string `json:"type"`
@@ -17,30 +26,23 @@ type MaimaiLevel struct {
 }
 
 type MaimaiRecord struct {
-	Rank      int           `json:"rank"`
+	ID        int           `json:"id"`
 	Title     string        `json:"title"`
-	Alias     []string      `json:"alias"`
 	ImagePath string        `json:"image"`
 	Levels    []MaimaiLevel `json:"levels"`
 	Category  string        `json:"category"`
-
-	CurrentLevel int `json:"current_level"`
 }
 
-func (r *MaimaiRecord) GetTrackType() string {
-	return r.Levels[r.CurrentLevel].Type
+func (r *MaimaiRecord) GetTrackType(level int) string {
+	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Type
 }
 
-func (r *MaimaiRecord) GetTrackLevel() string {
-	return r.Levels[r.CurrentLevel].Level
+func (r *MaimaiRecord) GetTrackLevel(level int) string {
+	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Level
 }
 
-func (r *MaimaiRecord) GetTrackDifficulty() string {
-	return r.Levels[r.CurrentLevel].Difficulty
-}
-
-func (r *MaimaiRecord) NextLevel() {
-	r.CurrentLevel = (r.CurrentLevel + 1) % len(r.Levels)
+func (r *MaimaiRecord) GetTrackDifficulty(level int) string {
+	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Difficulty
 }
 
 type MaimaiTicket struct {
@@ -48,10 +50,11 @@ type MaimaiTicket struct {
 	Creator string        `json:"creator"`
 	Record  *MaimaiRecord `json:"record"`
 	Rank    int           `json:"rank"`
+	Level   int           `json:"level"`
 }
 
 func (m *MaimaiTicket) RotateLevel() {
-	m.Record.NextLevel()
+	m.Level++
 }
 
 func (m *MaimaiTicket) GetKeyword() string {
@@ -63,7 +66,7 @@ func (m *MaimaiTicket) GetCoverPath() string {
 }
 
 func (m *MaimaiTicket) GetCoverInfo() string {
-	return m.Record.GetTrackType()
+	return m.Record.GetTrackType(m.Level)
 }
 
 func (m *MaimaiTicket) GetGenreInfo() string {
@@ -71,7 +74,7 @@ func (m *MaimaiTicket) GetGenreInfo() string {
 }
 
 func (m *MaimaiTicket) GetSongInfo() string {
-	return m.Record.GetTrackLevel() + "_" + m.Record.GetTrackDifficulty()
+	return m.Record.GetTrackLevel(m.Level) + "_" + m.Record.GetTrackDifficulty(m.Level)
 }
 
 func (m *MaimaiTicket) GetTitle() string {
@@ -154,6 +157,7 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 		Creator: t.tickets[index].Creator,
 		Record:  t.storage.PickOne(t.tickets[index].Keyword, t.tickets[index].Rank+1),
 		Rank:    t.tickets[index].Rank + 1,
+		Level:   t.tickets[index].Level,
 	}
 	t.tickets[index] = newTicket
 	err := t.saveCheckPoint()
@@ -190,13 +194,13 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 	return "切换成功", nil
 }
 
-func NewMaimaiTicketMaster(songDatabasePath string, checkPointPath string,
+func NewMaimaiTicketMaster(songDatabasePath string, aliasFilePath string, checkPointPath string,
 	maxTicketSize int) *MaimaiTicketMaster {
 	t := &MaimaiTicketMaster{
 		lock:           sync.RWMutex{},
 		maxTicketSize:  maxTicketSize,
 		checkPointPath: checkPointPath,
-		storage:        NewMaimaiStorage(songDatabasePath),
+		storage:        NewMaimaiStorage(songDatabasePath, aliasFilePath),
 	}
 
 	if ok := t.loadCheckPoint(); ok != nil {
@@ -251,11 +255,20 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 	if len(t.tickets) >= t.maxTicketSize {
 		return "", errors.New("歌单已满~")
 	}
+	targetLevel := 0
+	if strings.HasSuffix(keyword, "紫") || strings.HasPrefix(keyword, "紫") {
+		keyword = strings.Trim(keyword, "紫")
+		targetLevel = -4
+	} else if strings.HasSuffix(keyword, "红") || strings.HasPrefix(keyword, "红") {
+		keyword = strings.Trim(keyword, "红")
+		targetLevel = -3
+	}
 	t.tickets = append(t.tickets, &MaimaiTicket{
 		Keyword: keyword,
 		Creator: creator,
 		Record:  t.storage.PickOne(keyword, 0),
 		Rank:    0,
+		Level:   targetLevel,
 	})
 	err := t.saveCheckPoint()
 	if err != nil {
@@ -276,21 +289,19 @@ func (t *MaimaiTicketMaster) ForEachTicket(fn func(ticket model.ITicket)) {
 			Keyword: "",
 			Creator: "-",
 			Record: &MaimaiRecord{
-				Rank:      0,
 				Title:     "使用 点歌 <歌名>来自动匹配封面",
-				Alias:     nil,
-				ImagePath: "27254170d8811952baa1626557c101607b61bf526dcaf06491b71b0c416d315d.jpg",
+				ImagePath: "https://assets2.lxns.net/maimai/jacket/1444.png",
 				Levels: []MaimaiLevel{
 					{
 						Type:       "std",
-						Difficulty: "",
-						Level:      "bas",
+						Difficulty: "bas",
+						Level:      "",
 					},
 				},
-				Category:     "等待选择",
-				CurrentLevel: 0,
+				Category: "等待选择",
 			},
-			Rank: 0,
+			Rank:  0,
+			Level: 0,
 		})
 	}
 }
