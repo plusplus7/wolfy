@@ -36,7 +36,10 @@ func parseDanmu(caller, message string) *model.Task {
 		message = strings.TrimSpace(message)
 		parseInt, err := strconv.ParseInt(message, 10, 64)
 		if err == nil {
-			index = parseInt
+			index = parseInt - 1
+			if index < 0 {
+				index = 1
+			}
 		} else {
 			return nil
 		}
