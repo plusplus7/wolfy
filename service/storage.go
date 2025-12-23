@@ -5,9 +5,11 @@ import (
 	"encoding/xml"
 	"fmt"
 	fuzz "github.com/paul-mannino/go-fuzzywuzzy"
+	"io"
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,6 +54,9 @@ func parseSongInfoFromXML(path string) (*MaimaiRecord, error) {
 	if musicID >= 10000 && musicID < 100000 {
 		noteType = "dx"
 		coverUrl = coverPath(musicID - 10000)
+	} else if musicID >= 100000 {
+		noteType = "宴"
+		coverUrl = coverPath(musicID - 100000)
 	} else {
 		noteType = "std"
 		coverUrl = coverPath(musicID)
@@ -78,39 +83,56 @@ func parseSongInfoFromXML(path string) (*MaimaiRecord, error) {
 	if genre, ok := genreMapping[music.GenreName.Str]; ok {
 		result.Category = genre
 	} else {
-		panic(genre)
+		result.Category = "舞萌"
+		log.Printf("Couldn't find genre mapping for %s %s", path, music.GenreName.Str)
 	}
 	return result, nil
 }
 
 var genreMapping = map[string]string{
-	"ゲームバラエティ":       "其他游戏",
-	"maimai":         "舞萌",
-	"POPSアニメ":        "流行&动漫",
+	"ゲームバラエティ":     "其他游戏",
+	"maimai":               "舞萌",
+	"POPSアニメ":           "流行&动漫",
 	"niconicoボーカロイド": "niconico＆VOCALOID™",
-	"東方Project":      "东方Project",
-	"オンゲキCHUNITHM":   "音击/中二节奏",
-	"宴会場":            "宴会場",
+	"東方Project":          "东方Project",
+	"オンゲキCHUNITHM":     "音击/中二节奏",
+	"宴会場":               "宴会場",
+}
+
+func collectAlias(aliasPath string) (*Aliases, error) {
+	tryFetch, err := fetchAliasList()
+	if err != nil {
+		log.Printf("Failed to fetch aliases %v\n", err)
+	} else {
+		return tryFetch, nil
+	}
+
+	var aliases Aliases
+	if aliasPath != "" {
+		aliasFile, err := os.Open(aliasPath)
+		if err != nil {
+			return nil, err
+		}
+		defer aliasFile.Close()
+
+		aliasContent, err := io.ReadAll(aliasFile)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(aliasContent, &aliases)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &aliases, nil
 }
 
 func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, error) {
-	aliasFile, err := os.Open(aliasPath)
-	if err != nil {
-		return nil, err
-	}
-	defer aliasFile.Close()
 
-	// Read file content
-	aliasContent, err := ioutil.ReadAll(aliasFile)
+	aliases, err := collectAlias(aliasPath)
 	if err != nil {
 		return nil, err
 	}
-	var aliases Aliases
-	err = json.Unmarshal(aliasContent, &aliases)
-	if err != nil {
-		return nil, err
-	}
-
 	storage := &MaimaiStorage{
 		filePath: path,
 		records:  map[int]*MaimaiRecord{},
@@ -123,9 +145,10 @@ func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, 
 				log.Fatalf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
 				return err
 			}
-			if strings.HasSuffix(path, "/Music.xml") {
+			if d.IsDir() == false && d.Name() == "Music.xml" {
 				fromXML, err := parseSongInfoFromXML(path)
 				if err != nil {
+					log.Printf("error parsing song info from %s: %v\n", path, err)
 					return err
 				}
 				targetID := fromXML.ID
@@ -141,7 +164,7 @@ func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, 
 					storage.aliases[targetID] = []string{fromXML.Title}
 				}
 			}
-			log.Printf("visited file or dir: %q\n", path)
+			//	log.Printf("visited file or dir: %q\n", path)
 			return nil
 		})
 
@@ -154,7 +177,8 @@ func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, 
 			}
 		}
 	}
-	return storage, err
+	log.Println("Songs found:", len(storage.aliases), "records:", len(storage.records))
+	return storage, nil
 }
 
 func NewMaimaiStorage(filePath string, aliasPath string) *MaimaiStorage {
@@ -208,4 +232,34 @@ func (s *MaimaiStorage) rankRecord(keyword string) []*item {
 	}
 
 	return result
+}
+
+func fetchAliasList() (*Aliases, error) {
+
+	url := "https://maimai.lxns.net/api/v0/maimai/alias/list"
+	method := "GET"
+
+	client := &http.Client{}
+	req, err := http.NewRequest(method, url, nil)
+
+	if err != nil {
+		return nil, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	aliases := &Aliases{}
+	err = json.Unmarshal(body, aliases)
+	if err != nil {
+		return nil, err
+	}
+	return aliases, nil
 }

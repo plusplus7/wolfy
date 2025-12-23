@@ -16,16 +16,14 @@ type LocalServer struct {
 	router         *gin.Engine
 
 	taskChan chan *model.Task
-	game     string
 }
 
-func NewLocalServer(game string, songDB string, aliasPath string, taskChan chan *model.Task) *LocalServer {
+func NewLocalServer(songDB string, aliasPath string, taskChan chan *model.Task) *LocalServer {
 
 	localTicketsCheckPointPath := "./runtime/tickets.checkpoint.json"
 	localMessagesCheckPointPath := "./runtime/messages.checkpoint.json"
 
 	l := &LocalServer{
-		game:           game,
 		router:         gin.Default(),
 		TicketMaster:   service.NewMaimaiTicketMaster(songDB, aliasPath, localTicketsCheckPointPath, 12),
 		MessageManager: model.NewMessageManager(localMessagesCheckPointPath, 3, 10*time.Second),

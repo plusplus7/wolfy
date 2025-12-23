@@ -64,8 +64,10 @@ type AuthRespParam struct {
 
 // StartWebsocket 启动长连
 func StartWebsocket(wsAddr, authBody string, taskChan chan *model.Task) (err error) {
+
+	var conn *websocket.Conn
 	// 建立连接
-	conn, _, err := websocket.DefaultDialer.Dial(wsAddr, nil)
+	conn, _, err = websocket.DefaultDialer.Dial(wsAddr, nil)
 	if err != nil {
 		return err
 	}
@@ -232,6 +234,9 @@ func (wc *WebsocketClient) msgResp(msg *Proto) (err error) {
 		var task *model.Task
 		if r.Cmd == OpenPlatformDanmuCmd {
 			task = parseDanmu(r.Data.Uname, r.Data.Msg)
+			if task == nil {
+				continue
+			}
 		}
 		wc.taskChan <- task
 	}

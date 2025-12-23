@@ -24,23 +24,21 @@ func parseDanmu(caller, message string) *model.Task {
 		if strings.HasPrefix(message, KeyWordRePick) {
 			command = model.CommandNextRank
 			message = strings.TrimLeft(message, KeyWordPick)
-		}
-
-		if strings.HasPrefix(message, KeyWordNextLevel) {
+		} else if strings.HasPrefix(message, KeyWordNextLevel) {
 			command = model.CommandNextLevel
 			message = strings.TrimLeft(message, KeyWordPick)
-		}
-
-		if strings.HasPrefix(message, KeyWordDelete) {
+		} else if strings.HasPrefix(message, KeyWordDelete) {
 			command = model.CommandFinish
 			message = strings.TrimLeft(message, KeyWordDelete)
+		} else {
+			return nil
 		}
 		message = strings.TrimSpace(message)
-		var split = strings.Split(message, " ")
-		parseInt, err := strconv.ParseInt(split[0], 10, 64)
+		parseInt, err := strconv.ParseInt(message, 10, 64)
 		if err == nil {
 			index = parseInt
-			message = strings.Join(split[1:], " ")
+		} else {
+			return nil
 		}
 
 	}

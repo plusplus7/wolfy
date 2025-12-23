@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"wolfy/server"
@@ -8,11 +10,18 @@ import (
 )
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered from panic in main: %v\n", r)
+		}
+	}()
+
+	fmt.Println("Starting program...")
 	akID := os.Getenv("BILIBILI_AK_ID")
 	akSecret := os.Getenv("BILIBILI_AK_SECRET")
+
 	anchorCode := os.Getenv("ANCHOR_CODE")
 	appIDStr := os.Getenv("APP_ID")
-	game := os.Getenv("GAME")
 	songPackage := os.Getenv("SONG_PACKAGE_PATH")
 	aliasFile := os.Getenv("ALIAS_FILE_PATH")
 
@@ -32,6 +41,9 @@ func main() {
 		signatory,
 	)
 	bilibiliChan := bilibiliApp.Spin()
-	s := server.NewLocalServer(game, songPackage, aliasFile, bilibiliChan)
+	if bilibiliChan == nil {
+		panic(fmt.Errorf("bilibiliApp.Spin() returned nil"))
+	}
+	s := server.NewLocalServer(songPackage, aliasFile, bilibiliChan)
 	s.Spin()
 }

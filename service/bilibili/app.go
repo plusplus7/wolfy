@@ -29,9 +29,16 @@ func NewAppService(appId int64, anchorCode string, signatory ISignatory) *AppSer
 	}
 }
 func (a *AppService) Spin() chan *model.Task {
-	resp, err := a.startApp()
-	if err != nil {
-		panic(err)
+	var resp *BaseResp
+	var err error
+	for {
+		resp, err = a.startApp()
+		if err != nil {
+			log.Printf("app service start failed, %v, restarting", err)
+			time.Sleep(time.Second)
+			continue
+		}
+		break
 	}
 	startAppRespData := &StartAppRespData{}
 	err = json.Unmarshal(resp.Data, &startAppRespData)
@@ -41,17 +48,20 @@ func (a *AppService) Spin() chan *model.Task {
 
 	if startAppRespData == nil {
 		log.Println("start app get msg err")
-		return nil
+		panic("start app get msg err")
 	}
 
 	if len(startAppRespData.WebsocketInfo.WssLink) == 0 {
-		return nil
+		panic("start app websocket info get msg err")
 	}
 
 	go func(gameId string) {
 		for {
 			time.Sleep(time.Second * 20)
-			_, _ = a.appHeart(gameId)
+			_, err = a.appHeart(gameId)
+			if err != nil {
+				log.Printf("app heart failed, %v\n", err)
+			}
 		}
 	}(startAppRespData.GameInfo.GameId)
 
@@ -62,7 +72,7 @@ func (a *AppService) Spin() chan *model.Task {
 		a.taskChan)
 	if err != nil {
 		fmt.Println(err)
-		return nil
+		panic(err)
 	}
 
 	// 退出
