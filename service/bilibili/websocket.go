@@ -233,7 +233,9 @@ func (wc *WebsocketClient) msgResp(msg *Proto) (err error) {
 		}
 		var task *model.Task
 		if r.Cmd == OpenPlatformDanmuCmd {
+			log.Println(r)
 			task = parseDanmu(r.Data.Uname, r.Data.Msg)
+			log.Println(task)
 			if task == nil {
 				continue
 			}

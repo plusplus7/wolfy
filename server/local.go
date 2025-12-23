@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"log"
 	"strconv"
 	"time"
 	"wolfy/model"
@@ -45,7 +46,7 @@ func (l *LocalServer) taskRoutine(tasker chan *model.Task) {
 		}
 		_, err := l.taskHandler(task)
 		if err != nil {
-			return
+			log.Println(err)
 		}
 	}
 }
