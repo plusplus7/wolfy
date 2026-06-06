@@ -34,15 +34,38 @@ type MaimaiRecord struct {
 }
 
 func (r *MaimaiRecord) GetTrackType(level int) string {
-	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Type
+	track := r.trackAt(level)
+	if track == nil {
+		return "-"
+	}
+	return track.Type
 }
 
 func (r *MaimaiRecord) GetTrackLevel(level int) string {
-	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Level
+	track := r.trackAt(level)
+	if track == nil {
+		return "-"
+	}
+	return track.Level
 }
 
 func (r *MaimaiRecord) GetTrackDifficulty(level int) string {
-	return r.Levels[(2*len(r.Levels)-1-level)%len(r.Levels)].Difficulty
+	track := r.trackAt(level)
+	if track == nil {
+		return "-"
+	}
+	return track.Difficulty
+}
+
+func (r *MaimaiRecord) trackAt(level int) *MaimaiLevel {
+	if r == nil || len(r.Levels) == 0 {
+		return nil
+	}
+	index := (2*len(r.Levels) - 1 - level) % len(r.Levels)
+	if index < 0 {
+		index += len(r.Levels)
+	}
+	return &r.Levels[index]
 }
 
 type MaimaiTicket struct {
@@ -62,22 +85,37 @@ func (m *MaimaiTicket) GetKeyword() string {
 }
 
 func (m *MaimaiTicket) GetCoverPath() string {
+	if m == nil || m.Record == nil {
+		return ""
+	}
 	return m.Record.ImagePath
 }
 
 func (m *MaimaiTicket) GetCoverInfo() string {
+	if m == nil || m.Record == nil {
+		return "-"
+	}
 	return m.Record.GetTrackType(m.Level)
 }
 
 func (m *MaimaiTicket) GetGenreInfo() string {
+	if m == nil || m.Record == nil {
+		return "-"
+	}
 	return m.Record.Category
 }
 
 func (m *MaimaiTicket) GetSongInfo() string {
+	if m == nil || m.Record == nil {
+		return "-_-"
+	}
 	return m.Record.GetTrackLevel(m.Level) + "_" + m.Record.GetTrackDifficulty(m.Level)
 }
 
 func (m *MaimaiTicket) GetTitle() string {
+	if m == nil || m.Record == nil {
+		return "-"
+	}
 	return m.Record.Title
 }
 
@@ -95,38 +133,60 @@ type MaimaiTicketMaster struct {
 }
 
 const (
-	superAdmin = "主播"
+	superAdmin           = "主播"
+	maxTicketsPerCreator = 3
 )
 
 func (t *MaimaiTicketMaster) checkPermission(creator string, index int64) bool {
-	if index >= int64(len(t.tickets)) {
+	if !t.validIndex(index) {
 		return false
 	}
 	return t.tickets[index].Creator == creator || creator == superAdmin
 }
 
+func (t *MaimaiTicketMaster) validIndex(index int64) bool {
+	return index >= 0 && index < int64(len(t.tickets))
+}
+
+func (t *MaimaiTicketMaster) countTicketsByCreator(creator string) int {
+	count := 0
+	for _, ticket := range t.tickets {
+		if ticket != nil && ticket.Creator == creator {
+			count++
+		}
+	}
+	return count
+}
+
+func (t *MaimaiTicketMaster) resolveIndex(operator string, index int64) (int64, error) {
+	if index == -1 {
+		for i, ticket := range t.tickets {
+			if ticket != nil && ticket.Creator == operator {
+				return int64(i), nil
+			}
+		}
+		return -1, fmt.Errorf("%s 编号错误", operator)
+	}
+	if !t.validIndex(index) {
+		return -1, fmt.Errorf("%s 编号错误", operator)
+	}
+	return index, nil
+}
+
 func (t *MaimaiTicketMaster) FinishTicket(operator string, index int64) (string, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
-	}
-	if index == -1 {
-		for i, ticket := range t.tickets {
-			if ticket.Creator == operator {
-				index = int64(i)
-				break
-			}
-		}
+	index, err := t.resolveIndex(operator, index)
+	if err != nil {
+		return "", err
 	}
 
 	if !t.checkPermission(operator, index) {
 		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
 	}
 	t.tickets = append(t.tickets[:index], t.tickets[index+1:]...)
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save ticket check point %v", err)
 		return "", err
 	}
 	return "关闭成功", nil
@@ -136,16 +196,9 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
-	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
-	}
-	if index == -1 {
-		for i, ticket := range t.tickets {
-			if ticket.Creator == operator {
-				index = int64(i)
-				break
-			}
-		}
+	index, err := t.resolveIndex(operator, index)
+	if err != nil {
+		return "", err
 	}
 
 	if !t.checkPermission(operator, index) {
@@ -155,12 +208,15 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 	newTicket := &MaimaiTicket{
 		Keyword: t.tickets[index].Keyword,
 		Creator: t.tickets[index].Creator,
-		Record:  t.storage.PickOne(t.tickets[index].Keyword, t.tickets[index].Rank+1),
 		Rank:    t.tickets[index].Rank + 1,
 		Level:   t.tickets[index].Level,
 	}
+	newTicket.Record, err = t.storage.PickOne(t.tickets[index].Keyword, t.tickets[index].Rank+1)
+	if err != nil {
+		return "", err
+	}
 	t.tickets[index] = newTicket
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
 		return "", err
 	}
@@ -170,16 +226,9 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	if index >= int64(len(t.tickets)) {
-		return "", fmt.Errorf("%s 编号错误", operator)
-	}
-	if index == -1 {
-		for i, ticket := range t.tickets {
-			if ticket.Creator == operator {
-				index = int64(i)
-				break
-			}
-		}
+	index, err := t.resolveIndex(operator, index)
+	if err != nil {
+		return "", err
 	}
 	if !t.checkPermission(operator, index) {
 		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
@@ -187,7 +236,7 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 	fmt.Println(t.tickets[index])
 	t.tickets[index].RotateLevel()
 	fmt.Println(t.tickets[index])
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
 		return "", err
 	}
@@ -207,7 +256,7 @@ func NewMaimaiTicketMaster(songDatabasePath string, aliasFilePath string, checkP
 		t.tickets = make([]*MaimaiTicket, 0, maxTicketSize)
 		err := t.saveCheckPoint()
 		if err != nil {
-			panic(err)
+			log.Printf("failed to initialize ticket checkpoint: %v", err)
 		}
 	}
 
@@ -255,6 +304,9 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 	if len(t.tickets) >= t.maxTicketSize {
 		return "", errors.New("歌单已满~")
 	}
+	if t.countTicketsByCreator(creator) >= maxTicketsPerCreator {
+		return "", fmt.Errorf("%s 每人限点%d首", creator, maxTicketsPerCreator)
+	}
 	targetLevel := 0
 	if strings.HasSuffix(keyword, "紫") || strings.HasPrefix(keyword, "紫") {
 		keyword = strings.Trim(keyword, "紫")
@@ -263,16 +315,19 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 		keyword = strings.Trim(keyword, "红")
 		targetLevel = -3
 	}
+	record, err := t.storage.PickOne(keyword, 0)
+	if err != nil {
+		return "", err
+	}
 	t.tickets = append(t.tickets, &MaimaiTicket{
 		Keyword: keyword,
 		Creator: creator,
-		Record:  t.storage.PickOne(keyword, 0),
+		Record:  record,
 		Rank:    0,
 		Level:   targetLevel,
 	})
-	err := t.saveCheckPoint()
+	err = t.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save ticket check point %v", err)
 		return "", err
 	}
 	return "成功！", nil

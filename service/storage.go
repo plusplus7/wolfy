@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	fuzz "github.com/paul-mannino/go-fuzzywuzzy"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type MaimaiStorage struct {
@@ -64,6 +66,10 @@ func parseSongInfoFromXML(path string) (*MaimaiRecord, error) {
 	var levels []MaimaiLevel
 	difficulties := []string{"bas", "adv", "exp", "mas", "remas"}
 	for i, note := range music.NotesData.Notes {
+		if i >= len(difficulties) {
+			log.Printf("Skipping unsupported difficulty index %d for %s", i, path)
+			continue
+		}
 		if note.Level != 0 {
 			levels = append(levels, MaimaiLevel{
 				Type:       noteType,
@@ -100,13 +106,6 @@ var genreMapping = map[string]string{
 }
 
 func collectAlias(aliasPath string) (*Aliases, error) {
-	tryFetch, err := fetchAliasList()
-	if err != nil {
-		log.Printf("Failed to fetch aliases %v\n", err)
-	} else {
-		return tryFetch, nil
-	}
-
 	var aliases Aliases
 	if aliasPath != "" {
 		aliasFile, err := os.Open(aliasPath)
@@ -123,6 +122,14 @@ func collectAlias(aliasPath string) (*Aliases, error) {
 		if err != nil {
 			return nil, err
 		}
+		return &aliases, nil
+	}
+
+	tryFetch, err := fetchAliasList()
+	if err != nil {
+		log.Printf("Failed to fetch aliases %v\n", err)
+	} else {
+		return tryFetch, nil
 	}
 	return &aliases, nil
 }
@@ -142,7 +149,7 @@ func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, 
 	err = filepath.WalkDir(path,
 		func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				log.Fatalf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
+				log.Printf("failed accessing path %q: %v\n", path, err)
 				return err
 			}
 			if d.IsDir() == false && d.Name() == "Music.xml" {
@@ -184,20 +191,41 @@ func collectSongInfoFromPackage(path string, aliasPath string) (*MaimaiStorage, 
 func NewMaimaiStorage(filePath string, aliasPath string) *MaimaiStorage {
 	fromPackage, err := collectSongInfoFromPackage(filePath, aliasPath)
 	if err != nil {
-		panic(err)
+		log.Printf("failed to load maimai storage: %v", err)
+		return &MaimaiStorage{
+			filePath: filePath,
+			records:  map[int]*MaimaiRecord{},
+			aliases:  map[int][]string{},
+		}
 	}
 	return fromPackage
 }
 
-func (s *MaimaiStorage) PickOne(keyword string, rank int) *MaimaiRecord {
+func (s *MaimaiStorage) PickOne(keyword string, rank int) (*MaimaiRecord, error) {
+	if s == nil {
+		return nil, errors.New("曲库未初始化")
+	}
 	rankList := s.rankRecord(keyword)
-	return s.records[rankList[rank%len(rankList)].id]
+	if len(rankList) == 0 {
+		return nil, errors.New("曲库为空")
+	}
+	if rank < 0 {
+		rank = 0
+	}
+	record := s.records[rankList[rank%len(rankList)].id]
+	if record == nil {
+		return nil, errors.New("歌曲记录不存在")
+	}
+	return record, nil
 }
 
 func (s *MaimaiStorage) rankRecord(keyword string) []*item {
 
 	var result = make([]*item, 0, len(s.records))
 	for id, aliases := range s.aliases {
+		if s.records[id] == nil {
+			continue
+		}
 		highScore := -1
 		if id == 1681 {
 			highScore = -1
@@ -225,7 +253,9 @@ func (s *MaimaiStorage) rankRecord(keyword string) []*item {
 		}
 	})
 	for i, r := range result {
-		fmt.Println(r.score, r.id, s.records[r.id].Title)
+		if s.records[r.id] != nil {
+			fmt.Println(r.score, r.id, s.records[r.id].Title)
+		}
 		if i > 20 {
 			break
 		}
@@ -239,7 +269,7 @@ func fetchAliasList() (*Aliases, error) {
 	url := "https://maimai.lxns.net/api/v0/maimai/alias/list"
 	method := "GET"
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest(method, url, nil)
 
 	if err != nil {

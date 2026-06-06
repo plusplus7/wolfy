@@ -38,21 +38,30 @@ func (a *AppService) Spin() chan *model.Task {
 			time.Sleep(time.Second)
 			continue
 		}
+		if resp == nil {
+			log.Printf("app service start failed, %v, restarting", err)
+			time.Sleep(time.Second)
+			continue
+		} else {
+			log.Printf("app service spin success %v", resp.Message)
+		}
 		break
 	}
 	startAppRespData := &StartAppRespData{}
 	err = json.Unmarshal(resp.Data, &startAppRespData)
 	if err != nil {
-		panic(err)
+		log.Printf("start app response unmarshal failed: %v", err)
+		return nil
 	}
 
 	if startAppRespData == nil {
 		log.Println("start app get msg err")
-		panic("start app get msg err")
+		return nil
 	}
 
 	if len(startAppRespData.WebsocketInfo.WssLink) == 0 {
-		panic("start app websocket info get msg err")
+		log.Println("start app websocket info get msg err")
+		return nil
 	}
 
 	go func(gameId string) {
@@ -71,8 +80,8 @@ func (a *AppService) Spin() chan *model.Task {
 		startAppRespData.WebsocketInfo.AuthBody,
 		a.taskChan)
 	if err != nil {
-		fmt.Println(err)
-		panic(err)
+		log.Println(err)
+		return nil
 	}
 
 	// 退出
@@ -92,7 +101,7 @@ func (a *AppService) Spin() chan *model.Task {
 			//关闭应用
 			_, err = a.endApp(startAppRespData.GameInfo.GameId, a.AppId)
 			if err != nil {
-				panic(err)
+				log.Printf("end app failed: %v", err)
 			}
 		}
 	}()
@@ -138,16 +147,16 @@ func (a *AppService) apiRequest(reqJson, requestUrl string) (*BaseResp, error) {
 		http.MethodPost,
 		fmt.Sprintf("%s%s", OpenPlatformHttpHost, requestUrl),
 		bytes.NewBuffer([]byte(reqJson)))
-	req.Header = header.ToHTTPHeader()
-
 	if err != nil {
 		return nil, err
 	}
+	req.Header = header.ToHTTPHeader()
 	cli := &http.Client{}
 	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 	var result BaseResp
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	if err != nil {

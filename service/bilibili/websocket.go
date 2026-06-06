@@ -101,34 +101,47 @@ func StartWebsocket(wsAddr, authBody string, taskChan chan *model.Task) (err err
 // ReadMsg 读取长连信息
 func (wc *WebsocketClient) ReadMsg() {
 	for {
-		retProto := &Proto{}
 		_, buf, err := wc.conn.ReadMessage()
 		if err != nil {
 			log.Println("[WebsocketClient | ReadMsg] err:", err.Error())
-			continue
+			return
 		}
-		retProto.PacketLength = int32(binary.BigEndian.Uint32(buf[PackOffset:HeaderOffset]))
-		retProto.HeaderLength = int16(binary.BigEndian.Uint16(buf[HeaderOffset:VerOffset]))
-		retProto.Version = int16(binary.BigEndian.Uint16(buf[VerOffset:OperationOffset]))
-		retProto.Operation = int32(binary.BigEndian.Uint32(buf[OperationOffset:SeqIdOffset]))
-		retProto.SequenceId = int32(binary.BigEndian.Uint32(buf[SeqIdOffset:]))
-		if retProto.PacketLength < 0 || retProto.PacketLength > MaxPackSize {
+		retProto, ok := parseProto(buf)
+		if !ok {
 			continue
-		}
-		if retProto.HeaderLength != RawHeaderSize {
-			continue
-		}
-		if bodyLen := int(retProto.PacketLength - int32(retProto.HeaderLength)); bodyLen > 0 {
-			retProto.Body = buf[retProto.HeaderLength:retProto.PacketLength]
-		} else {
-			continue
-		}
-		retProto.BodyMuti = [][]byte{retProto.Body}
-		if len(retProto.BodyMuti) > 0 {
-			retProto.Body = retProto.BodyMuti[0]
 		}
 		wc.msgBuf <- retProto
 	}
+}
+
+func parseProto(buf []byte) (*Proto, bool) {
+	if len(buf) < RawHeaderSize {
+		log.Printf("[WebsocketClient | ReadMsg] short packet: %d", len(buf))
+		return nil, false
+	}
+	retProto := &Proto{}
+	retProto.PacketLength = int32(binary.BigEndian.Uint32(buf[PackOffset:HeaderOffset]))
+	retProto.HeaderLength = int16(binary.BigEndian.Uint16(buf[HeaderOffset:VerOffset]))
+	retProto.Version = int16(binary.BigEndian.Uint16(buf[VerOffset:OperationOffset]))
+	retProto.Operation = int32(binary.BigEndian.Uint32(buf[OperationOffset:SeqIdOffset]))
+	retProto.SequenceId = int32(binary.BigEndian.Uint32(buf[SeqIdOffset:RawHeaderSize]))
+	if retProto.PacketLength < 0 || retProto.PacketLength > MaxPackSize {
+		return nil, false
+	}
+	if retProto.HeaderLength != RawHeaderSize {
+		return nil, false
+	}
+	if int(retProto.PacketLength) > len(buf) {
+		log.Printf("[WebsocketClient | ReadMsg] packet length %d exceeds buffer length %d", retProto.PacketLength, len(buf))
+		return nil, false
+	}
+	if bodyLen := int(retProto.PacketLength - int32(retProto.HeaderLength)); bodyLen <= 0 {
+		return nil, false
+	}
+	retProto.Body = buf[retProto.HeaderLength:retProto.PacketLength]
+	retProto.BodyMuti = [][]byte{retProto.Body}
+	retProto.Body = retProto.BodyMuti[0]
+	return retProto, true
 }
 
 // DoEvent 处理信息

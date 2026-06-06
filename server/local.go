@@ -42,11 +42,14 @@ func (l *LocalServer) taskRoutine(tasker chan *model.Task) {
 	for {
 		task := <-tasker
 		if task == nil { // shutdown
-			break
+			log.Println("taskRoutine", task)
+			continue
 		}
-		_, err := l.taskHandler(task)
+		msg, err := l.taskHandler(task)
 		if err != nil {
-			log.Println(err)
+			log.Println(msg, err)
+		} else {
+			log.Println(msg, err)
 		}
 	}
 }
@@ -187,9 +190,13 @@ func (l *LocalServer) Register() {
 }
 
 func (l *LocalServer) Spin() {
-	err := l.router.Run("[::]:41377")
+	err := service.OpenURL("http://localhost:41377/static/")
+	if err != nil {
+		log.Println(err)
+	}
+	err = l.router.Run("[::]:41377")
 
 	if err != nil {
-		panic(err)
+		log.Println(err)
 	}
 }

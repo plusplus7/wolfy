@@ -33,7 +33,7 @@ func NewMessageManager(checkPointPath string, maxSize int, leftTime time.Duratio
 		m.messages = make([]*Message, 0)
 		err := m.saveCheckPoint()
 		if err != nil {
-			panic(err)
+			log.Printf("failed to initialize message checkpoint: %v", err)
 		}
 	}
 	return m
@@ -87,7 +87,7 @@ func (m *MessageManager) Push(message string) {
 
 	err := m.saveCheckPoint()
 	if err != nil {
-		log.Fatalf("failed to save check point %v", err)
+		log.Printf("failed to save check point %v", err)
 	}
 }
 

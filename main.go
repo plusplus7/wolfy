@@ -1,3 +1,5 @@
+//go:build !remote
+
 package main
 
 import (
@@ -27,7 +29,8 @@ func main() {
 
 	appID, err := strconv.Atoi(appIDStr)
 	if err != nil {
-		panic(err)
+		log.Printf("invalid APP_ID %q: %v", appIDStr, err)
+		return
 	}
 	var signatory bilibili.ISignatory
 	if akID != "" && akSecret != "" {
@@ -42,7 +45,8 @@ func main() {
 	)
 	bilibiliChan := bilibiliApp.Spin()
 	if bilibiliChan == nil {
-		panic(fmt.Errorf("bilibiliApp.Spin() returned nil"))
+		log.Println("bilibiliApp.Spin() returned nil")
+		return
 	}
 	s := server.NewLocalServer(songPackage, aliasFile, bilibiliChan)
 	s.Spin()

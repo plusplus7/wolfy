@@ -26,7 +26,7 @@ func (r *RemoteSignatoryServer) Spin() {
 	err := r.router.Run("[::]:41376")
 
 	if err != nil {
-		panic(err)
+		log.Println(err)
 	}
 }
 
