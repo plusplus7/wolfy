@@ -3,12 +3,17 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
-	"os"
-	"strconv"
+	"wolfy/components"
+	blivedmcomponent "wolfy/components/blivedm"
+	danmucomponent "wolfy/components/danmu"
+	messagescomponent "wolfy/components/messages"
+	servercomponent "wolfy/components/server"
+	songscomponent "wolfy/components/songs"
+	ticketscomponent "wolfy/components/tickets"
 	"wolfy/server"
-	"wolfy/service/bilibili"
 )
 
 func main() {
@@ -19,35 +24,46 @@ func main() {
 	}()
 
 	fmt.Println("Starting program...")
-	akID := os.Getenv("BILIBILI_AK_ID")
-	akSecret := os.Getenv("BILIBILI_AK_SECRET")
-
-	anchorCode := os.Getenv("ANCHOR_CODE")
-	appIDStr := os.Getenv("APP_ID")
-	songPackage := os.Getenv("SONG_PACKAGE_PATH")
-	aliasFile := os.Getenv("ALIAS_FILE_PATH")
-
-	appID, err := strconv.Atoi(appIDStr)
+	ctx := context.Background()
+	manager, err := components.NewManager("./runtime/component.params.json")
 	if err != nil {
-		log.Printf("invalid APP_ID %q: %v", appIDStr, err)
+		log.Printf("failed to initialize component manager: %v", err)
 		return
 	}
-	var signatory bilibili.ISignatory
-	if akID != "" && akSecret != "" {
-		signatory = bilibili.NewLocalSignatory(akID, akSecret)
+
+	serverComponent := servercomponent.NewServerComponent()
+	songsComponent := songscomponent.NewSongsComponent()
+	messagesComponent := messagescomponent.NewMessagesComponent()
+	ticketsComponent := ticketscomponent.NewTicketsComponent(songsComponent, messagesComponent.MessageChan())
+	danmuComponent := danmucomponent.NewDanmuComponent(ticketsComponent.TaskChan(), messagesComponent.MessageChan())
+	blivedmComponent := blivedmcomponent.NewBlivedmComponent(ticketsComponent.TaskChan(), messagesComponent.MessageChan())
+	danmuComponent.SetDanmuSourceFunc(serverComponent.DanmuSource)
+	blivedmComponent.SetDanmuSourceFunc(serverComponent.DanmuSource)
+
+	for _, component := range []components.Component{
+		serverComponent,
+		songsComponent,
+		messagesComponent,
+		ticketsComponent,
+		danmuComponent,
+		blivedmComponent,
+	} {
+		if err := manager.Register(component); err != nil {
+			log.Printf("failed to register component %s: %v", component.Name(), err)
+			return
+		}
+	}
+
+	_ = songsComponent.Start(ctx)
+	_ = messagesComponent.Start(ctx)
+	_ = ticketsComponent.Start(ctx)
+	if serverComponent.DanmuSource() == servercomponent.DanmuSourceBlivedm {
+		_ = blivedmComponent.Start(ctx)
 	} else {
-		signatory = bilibili.NewRemoteSignatory("https://plusplus7.com:42376", akSecret)
+		_ = danmuComponent.Start(ctx)
 	}
-	bilibiliApp := bilibili.NewAppService(
-		int64(appID),
-		anchorCode,
-		signatory,
-	)
-	bilibiliChan := bilibiliApp.Spin()
-	if bilibiliChan == nil {
-		log.Println("bilibiliApp.Spin() returned nil")
-		return
-	}
-	s := server.NewLocalServer(songPackage, aliasFile, bilibiliChan)
+	_ = serverComponent.Start(ctx)
+
+	s := server.NewLocalServer(manager, ticketsComponent, messagesComponent)
 	s.Spin()
 }

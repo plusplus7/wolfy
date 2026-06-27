@@ -1,1 +1,6 @@
 .gitnexus
+.DS_Store
+.idea/
+main.exe
+runtime/*.json
+runtime/.*.tmp-*

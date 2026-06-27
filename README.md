@@ -9,8 +9,9 @@ Wolfy 是一个面向 Bilibili 直播间的舞萌 DX 点歌工具。它会连接
 - 从 Bilibili 直播开放平台接收弹幕任务。
 - 支持点歌、换歌、换谱、删除当前点歌。
 - 基于舞萌曲库 XML 和 alias 数据做歌曲模糊匹配。
-- 内置 Web 页面和 JSON API，用于展示当前点歌队列与临时消息。
+- 内置 Web 页面和 JSON API，用于展示当前点歌队列与消息。
 - 点歌队列会写入 `runtime/tickets.checkpoint.json`，消息会写入 `runtime/messages.checkpoint.json`。
+- 消息最多保留最近 20 条。
 - 每人最多同时保留 3 首未完成点歌。
 
 ### 环境要求
@@ -129,8 +130,9 @@ Wolfy is a Maimai DX song-request tool for Bilibili live rooms. It connects to t
 - Receives live-chat tasks from the Bilibili Live Open Platform.
 - Supports song request, rerolling the matched song, changing chart difficulty, and deleting requests.
 - Uses Maimai XML song data and alias data for fuzzy song matching.
-- Serves a built-in web UI and JSON API for the current queue and transient messages.
+- Serves a built-in web UI and JSON API for the current queue and messages.
 - Persists tickets to `runtime/tickets.checkpoint.json` and messages to `runtime/messages.checkpoint.json`.
+- Keeps at most the latest 20 messages.
 - Limits each user to at most 3 pending song requests.
 
 ### Requirements

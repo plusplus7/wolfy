@@ -2,38 +2,39 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"sync"
-	"time"
+	"wolfy/internal/fileutil"
 )
 
 type Message struct {
-	Content    string `json:"content"`
-	ExpireTime int64  `json:"expire_time"`
+	Content string `json:"content"`
 }
 
 type MessageManager struct {
 	messages       []*Message
 	maxSize        int
-	lifeTime       time.Duration
 	lock           *sync.Mutex
 	checkPointPath string
 }
 
-func NewMessageManager(checkPointPath string, maxSize int, leftTime time.Duration) *MessageManager {
+func NewMessageManager(checkPointPath string, maxSize int) *MessageManager {
 	m := &MessageManager{
 		maxSize:        maxSize,
 		lock:           &sync.Mutex{},
 		checkPointPath: checkPointPath,
-		lifeTime:       leftTime,
 	}
 
-	if ok := m.loadCheckPoint(); ok != nil {
+	if err := m.loadCheckPoint(); err != nil {
 		m.messages = make([]*Message, 0)
-		err := m.saveCheckPoint()
-		if err != nil {
-			log.Printf("failed to initialize message checkpoint: %v", err)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := m.saveCheckPoint(); err != nil {
+				log.Printf("failed to initialize message checkpoint: %v", err)
+			}
+		} else {
+			log.Printf("failed to load message checkpoint: %v", err)
 		}
 	}
 	return m
@@ -53,6 +54,11 @@ func (m *MessageManager) loadCheckPoint() error {
 	if err != nil {
 		return err
 	}
+	if m.maxSize <= 0 {
+		messages = nil
+	} else if len(messages) > m.maxSize {
+		messages = messages[:m.maxSize]
+	}
 	m.messages = messages
 	return nil
 }
@@ -66,23 +72,26 @@ func (m *MessageManager) saveCheckPoint() error {
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(m.checkPointPath, result, 0644)
-	if err != nil {
-		return err
-	}
-	return nil
+	return fileutil.AtomicWriteFile(m.checkPointPath, result, 0644)
 }
 
 func (m *MessageManager) Push(message string) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	if m.maxSize <= 0 {
+		m.messages = nil
+		if err := m.saveCheckPoint(); err != nil {
+			log.Printf("failed to save check point %v", err)
+		}
+		return
+	}
+
 	if len(m.messages) >= m.maxSize {
 		m.messages = m.messages[:len(m.messages)-1]
 	}
 
 	m.messages = append([]*Message{{
-		Content:    message,
-		ExpireTime: time.Now().Add(m.lifeTime).Unix(),
+		Content: message,
 	}}, m.messages...)
 
 	err := m.saveCheckPoint()
@@ -93,11 +102,13 @@ func (m *MessageManager) Push(message string) {
 
 func (m *MessageManager) ForEachMessage(fn func(message *Message)) {
 	m.lock.Lock()
-	defer m.lock.Unlock()
-
+	messages := make([]*Message, 0, len(m.messages))
 	for _, message := range m.messages {
-		if message.ExpireTime > time.Now().Unix() {
-			fn(message)
-		}
+		messages = append(messages, message)
+	}
+	m.lock.Unlock()
+
+	for _, message := range messages {
+		fn(message)
 	}
 }
