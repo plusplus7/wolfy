@@ -33,11 +33,6 @@ const (
 	ComponentEventDanmuListenerFailed  ComponentEventType = "danmu.listener_failed"
 	ComponentEventDanmuDanmuReceived   ComponentEventType = "danmu.danmu_received"
 	ComponentEventDanmuTaskDelivered   ComponentEventType = "danmu.task_delivered"
-
-	ComponentEventBlivedmClientStarted ComponentEventType = "blivedm.client_started"
-	ComponentEventBlivedmClientFailed  ComponentEventType = "blivedm.client_failed"
-	ComponentEventBlivedmDanmuReceived ComponentEventType = "blivedm.danmu_received"
-	ComponentEventBlivedmTaskDelivered ComponentEventType = "blivedm.task_delivered"
 )
 
 type ComponentEvent struct {
@@ -67,10 +62,6 @@ var componentEventCatalog = []ComponentEventTypeInfo{
 	{Type: ComponentEventDanmuListenerFailed, Description: "open-platform danmu listener failed"},
 	{Type: ComponentEventDanmuDanmuReceived, Description: "open-platform danmu received a danmu"},
 	{Type: ComponentEventDanmuTaskDelivered, Description: "open-platform danmu delivered a task to tickets"},
-	{Type: ComponentEventBlivedmClientStarted, Description: "blivedm client started"},
-	{Type: ComponentEventBlivedmClientFailed, Description: "blivedm client failed"},
-	{Type: ComponentEventBlivedmDanmuReceived, Description: "blivedm received a danmu"},
-	{Type: ComponentEventBlivedmTaskDelivered, Description: "blivedm delivered a task to tickets"},
 }
 
 var (

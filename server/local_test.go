@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 	"wolfy/components"
-	blivedmcomponent "wolfy/components/blivedm"
 	danmucomponent "wolfy/components/danmu"
+	"wolfy/components/danmu/bilibili"
 	servercomponent "wolfy/components/server"
 	"wolfy/model"
 )
@@ -109,61 +111,13 @@ func TestComponentEventTypesEndpoint(t *testing.T) {
 	}
 }
 
-func TestRestartDanmuComponentStopsPeer(t *testing.T) {
+func TestRestartComponentEndpointRestartsTarget(t *testing.T) {
 	manager, err := components.NewManager(filepath.Join(t.TempDir(), "params.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	danmu := newLifecycleComponent(danmucomponent.DanmuComponentName)
-	blivedm := newLifecycleComponent(blivedmcomponent.BlivedmComponentName)
-	serverComponent := servercomponent.NewServerComponent()
-	if err := manager.Register(serverComponent); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.UpdateParams("server", map[string]string{servercomponent.ParamDanmuSource: servercomponent.DanmuSourceBlivedm}); err != nil {
-		t.Fatal(err)
-	}
 	if err := manager.Register(danmu); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Register(blivedm); err != nil {
-		t.Fatal(err)
-	}
-	local := NewLocalServer(manager, nil, nil)
-	req := httptest.NewRequest(http.MethodPost, "/api/components/blivedm/restart", nil)
-	rec := httptest.NewRecorder()
-
-	local.router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("unexpected status %d: %s", rec.Code, rec.Body.String())
-	}
-	if danmu.stops != 1 {
-		t.Fatalf("expected danmu peer to stop, stops=%d", danmu.stops)
-	}
-	if blivedm.starts != 1 {
-		t.Fatalf("expected blivedm to restart, starts=%d", blivedm.starts)
-	}
-}
-
-func TestRestartInactiveDanmuComponentDoesNotStopActivePeer(t *testing.T) {
-	manager, err := components.NewManager(filepath.Join(t.TempDir(), "params.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	danmu := newLifecycleComponent(danmucomponent.DanmuComponentName)
-	blivedm := newLifecycleComponent(blivedmcomponent.BlivedmComponentName)
-	serverComponent := servercomponent.NewServerComponent()
-	if err := manager.Register(serverComponent); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.UpdateParams("server", map[string]string{servercomponent.ParamDanmuSource: servercomponent.DanmuSourceBlivedm}); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Register(danmu); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Register(blivedm); err != nil {
 		t.Fatal(err)
 	}
 	local := NewLocalServer(manager, nil, nil)
@@ -175,11 +129,8 @@ func TestRestartInactiveDanmuComponentDoesNotStopActivePeer(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status %d: %s", rec.Code, rec.Body.String())
 	}
-	if blivedm.stops != 0 {
-		t.Fatalf("inactive restart should not stop active peer, stops=%d", blivedm.stops)
-	}
 	if danmu.starts != 1 {
-		t.Fatalf("expected danmu restart attempt, starts=%d", danmu.starts)
+		t.Fatalf("expected danmu to restart, starts=%d", danmu.starts)
 	}
 }
 
@@ -189,11 +140,7 @@ func TestStopComponentEndpointStopsTargetOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	danmu := newLifecycleComponent(danmucomponent.DanmuComponentName)
-	blivedm := newLifecycleComponent(blivedmcomponent.BlivedmComponentName)
 	if err := manager.Register(danmu); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Register(blivedm); err != nil {
 		t.Fatal(err)
 	}
 	local := NewLocalServer(manager, nil, nil)
@@ -207,9 +154,6 @@ func TestStopComponentEndpointStopsTargetOnly(t *testing.T) {
 	}
 	if danmu.stops != 1 {
 		t.Fatalf("expected danmu to stop once, stops=%d", danmu.stops)
-	}
-	if blivedm.stops != 0 {
-		t.Fatalf("stop should not stop peer, blivedm stops=%d", blivedm.stops)
 	}
 	var body struct {
 		Data components.ComponentSnapshot `json:"data"`
@@ -398,5 +342,125 @@ func TestLocalServerCORSAllowsLocalOrigins(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
 		t.Fatalf("unexpected CORS origin %q", got)
+	}
+}
+
+type localHTTPFakeRemoteClient struct {
+	startCalls  int
+	stopCalls   int
+	pullStarted chan struct{}
+}
+
+func (f *localHTTPFakeRemoteClient) StartGame(ctx context.Context, req bilibili.StartGameRequest) (*bilibili.StartGameResponse, error) {
+	f.startCalls++
+	return &bilibili.StartGameResponse{Data: bilibili.GameSession{Status: "running", LastSeq: 9}}, nil
+}
+
+func (f *localHTTPFakeRemoteClient) GetGame(ctx context.Context, anchorCode string) (*bilibili.StartGameResponse, error) {
+	return &bilibili.StartGameResponse{Data: bilibili.GameSession{Status: "running", LastSeq: 9}}, nil
+}
+
+func (f *localHTTPFakeRemoteClient) StopGame(ctx context.Context, anchorCode string, req bilibili.StopGameRequest) (*bilibili.StopGameResponse, error) {
+	f.stopCalls++
+	return &bilibili.StopGameResponse{Data: bilibili.GameSession{Status: "stopped"}}, nil
+}
+
+func (f *localHTTPFakeRemoteClient) PullDanmu(ctx context.Context, anchorCode string, afterSeq int64, limit int, waitMS int) (*bilibili.PullDanmuResponse, error) {
+	select {
+	case f.pullStarted <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestDanmuEndpointsManageRemoteBridge(t *testing.T) {
+	manager, err := components.NewManager(filepath.Join(t.TempDir(), "params.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	danmu := danmucomponent.NewDanmuComponent(make(chan *model.Task, 1), make(chan string, 1))
+	fakeClient := &localHTTPFakeRemoteClient{pullStarted: make(chan struct{}, 1)}
+	danmu.SetRemoteClientFactory(func(baseURL string) danmucomponent.RemoteDanmuClient { return fakeClient })
+	if err := manager.Register(danmu); err != nil {
+		t.Fatal(err)
+	}
+	local := NewLocalServer(manager, nil, nil, danmu)
+
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/danmu",
+		bytes.NewBufferString(`{"config":{"remote_base_url":"http://remote.test","app_id":42,"anchor_code":"anchor"}}`),
+	)
+	rec := httptest.NewRecorder()
+	local.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch status %d: %s", rec.Code, rec.Body.String())
+	}
+	var patchBody struct {
+		Data LocalDanmuStatus `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &patchBody); err != nil {
+		t.Fatal(err)
+	}
+	if patchBody.Data.Config.RemoteBaseURL != "http://remote.test" || patchBody.Data.Config.AppID != 42 || patchBody.Data.Config.AnchorCode != "anchor" {
+		t.Fatalf("unexpected patch body %#v", patchBody)
+	}
+
+	rec = httptest.NewRecorder()
+	local.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/danmu/start", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start status %d: %s", rec.Code, rec.Body.String())
+	}
+	if fakeClient.startCalls != 1 {
+		t.Fatalf("expected start call, got %d", fakeClient.startCalls)
+	}
+	select {
+	case <-fakeClient.pullStarted:
+	case <-time.After(time.Second):
+		t.Fatal("pull loop did not start")
+	}
+
+	rec = httptest.NewRecorder()
+	local.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/danmu", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get status %d: %s", rec.Code, rec.Body.String())
+	}
+	var statusBody struct {
+		Data LocalDanmuStatus `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &statusBody); err != nil {
+		t.Fatal(err)
+	}
+	if statusBody.Data.Status != components.StatusRunning || statusBody.Data.LastSeq != 9 {
+		t.Fatalf("unexpected status body %#v", statusBody)
+	}
+
+	rec = httptest.NewRecorder()
+	local.router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/danmu/stop", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stop status %d: %s", rec.Code, rec.Body.String())
+	}
+	if fakeClient.stopCalls != 1 {
+		t.Fatalf("expected stop call, got %d", fakeClient.stopCalls)
+	}
+}
+
+func TestLocalDanmuContractJSONTags(t *testing.T) {
+	assertLocalJSONTag(t, reflect.TypeOf(RemoteDanmuConfig{}), "RemoteBaseURL", "remote_base_url")
+	assertLocalJSONTag(t, reflect.TypeOf(RemoteDanmuConfig{}), "AppID", "app_id")
+	assertLocalJSONTag(t, reflect.TypeOf(RemoteDanmuConfig{}), "AnchorCode", "anchor_code")
+	assertLocalJSONTag(t, reflect.TypeOf(UpdateRemoteDanmuConfigRequest{}), "Config", "config")
+	assertLocalJSONTag(t, reflect.TypeOf(LocalDanmuStatus{}), "LastSeq", "last_seq")
+}
+
+func assertLocalJSONTag(t *testing.T, typ reflect.Type, fieldName string, want string) {
+	t.Helper()
+	field, ok := typ.FieldByName(fieldName)
+	if !ok {
+		t.Fatalf("missing field %s on %s", fieldName, typ.Name())
+	}
+	if got := field.Tag.Get("json"); got != want {
+		t.Fatalf("%s.%s json tag = %q, want %q", typ.Name(), fieldName, got, want)
 	}
 }

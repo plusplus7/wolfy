@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"wolfy/components"
-	blivedmcomponent "wolfy/components/blivedm"
 	danmucomponent "wolfy/components/danmu"
 	messagescomponent "wolfy/components/messages"
 	servercomponent "wolfy/components/server"
@@ -36,9 +35,6 @@ func main() {
 	messagesComponent := messagescomponent.NewMessagesComponent()
 	ticketsComponent := ticketscomponent.NewTicketsComponent(songsComponent, messagesComponent.MessageChan())
 	danmuComponent := danmucomponent.NewDanmuComponent(ticketsComponent.TaskChan(), messagesComponent.MessageChan())
-	blivedmComponent := blivedmcomponent.NewBlivedmComponent(ticketsComponent.TaskChan(), messagesComponent.MessageChan())
-	danmuComponent.SetDanmuSourceFunc(serverComponent.DanmuSource)
-	blivedmComponent.SetDanmuSourceFunc(serverComponent.DanmuSource)
 
 	for _, component := range []components.Component{
 		serverComponent,
@@ -46,7 +42,6 @@ func main() {
 		messagesComponent,
 		ticketsComponent,
 		danmuComponent,
-		blivedmComponent,
 	} {
 		if err := manager.Register(component); err != nil {
 			log.Printf("failed to register component %s: %v", component.Name(), err)
@@ -57,13 +52,9 @@ func main() {
 	_ = songsComponent.Start(ctx)
 	_ = messagesComponent.Start(ctx)
 	_ = ticketsComponent.Start(ctx)
-	if serverComponent.DanmuSource() == servercomponent.DanmuSourceBlivedm {
-		_ = blivedmComponent.Start(ctx)
-	} else {
-		_ = danmuComponent.Start(ctx)
-	}
+	_ = danmuComponent.Start(ctx)
 	_ = serverComponent.Start(ctx)
 
-	s := server.NewLocalServer(manager, ticketsComponent, messagesComponent)
+	s := server.NewLocalServer(manager, ticketsComponent, messagesComponent, danmuComponent)
 	s.Spin()
 }

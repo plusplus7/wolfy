@@ -128,6 +128,61 @@ func (a *AppService) Spin(ctx context.Context) chan *model.Task {
 	return a.taskChan
 }
 
+func (a *AppService) SpinEvents(ctx context.Context, eventSink chan<- *DanmuEvent) (*StartAppRespData, error) {
+	resp, err := a.startApp(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("start app response is nil")
+	}
+	startAppRespData := &StartAppRespData{}
+	if err := json.Unmarshal(resp.Data, startAppRespData); err != nil {
+		return nil, err
+	}
+	if len(startAppRespData.WebsocketInfo.WssLink) == 0 {
+		return nil, fmt.Errorf("start app response missing websocket link")
+	}
+
+	gameId := startAppRespData.GameInfo.GameId
+	go func() {
+		ticker := time.NewTicker(time.Second * 20)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, heartErr := a.appHeart(ctx, gameId)
+				if heartErr != nil {
+					log.Printf("app heart failed, %v\n", heartErr)
+				}
+			}
+		}
+	}()
+
+	if err := StartWebsocketWithEvents(ctx,
+		startAppRespData.WebsocketInfo.WssLink[0],
+		startAppRespData.WebsocketInfo.AuthBody,
+		nil,
+		nil,
+		a.recorder,
+		eventSink); err != nil {
+		return nil, err
+	}
+
+	go func() {
+		<-ctx.Done()
+		endCtx, cancel := context.WithTimeout(context.Background(), openPlatformAPITimeout)
+		defer cancel()
+		_, endErr := a.endApp(endCtx, gameId, a.AppId)
+		if endErr != nil {
+			log.Printf("end app failed: %v", endErr)
+		}
+	}()
+	return startAppRespData, nil
+}
+
 func sleepWithContext(ctx context.Context, duration time.Duration) bool {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()

@@ -48,6 +48,7 @@ type WebsocketClient struct {
 	authed      bool
 	taskChan    chan *model.Task
 	messageChan chan<- string
+	eventSink   chan<- *DanmuEvent
 	recorder    EventRecorder
 }
 
@@ -69,6 +70,10 @@ type AuthRespParam struct {
 
 // StartWebsocket 启动长连
 func StartWebsocket(ctx context.Context, wsAddr, authBody string, taskChan chan *model.Task, messageChan chan<- string, recorder EventRecorder) (err error) {
+	return StartWebsocketWithEvents(ctx, wsAddr, authBody, taskChan, messageChan, recorder, nil)
+}
+
+func StartWebsocketWithEvents(ctx context.Context, wsAddr, authBody string, taskChan chan *model.Task, messageChan chan<- string, recorder EventRecorder, eventSink chan<- *DanmuEvent) (err error) {
 
 	var conn *websocket.Conn
 	// 建立连接
@@ -82,6 +87,7 @@ func StartWebsocket(ctx context.Context, wsAddr, authBody string, taskChan chan 
 		dispatcher:  make(map[int32]protoLogic),
 		taskChan:    taskChan,
 		messageChan: messageChan,
+		eventSink:   eventSink,
 		recorder:    recorder,
 	}
 
@@ -277,6 +283,20 @@ func (wc *WebsocketClient) msgResp(msg *Proto) (err error) {
 		}
 		if wc.messageChan != nil {
 			wc.messageChan <- formatDanmuMessage(r.Data.Uname, r.Data.Msg)
+		}
+		if wc.eventSink != nil {
+			wc.eventSink <- &DanmuEvent{
+				MsgID:      r.Data.MsgID,
+				RoomID:     int64(r.Data.RoomID),
+				Caller:     r.Data.Uname,
+				UID:        int64(r.Data.UID),
+				Uface:      r.Data.Uface,
+				Message:    r.Data.Msg,
+				Timestamp:  int64(r.Data.Timestamp),
+				ReceivedAt: time.Now().Format(time.RFC3339Nano),
+				RawCmd:     r.Cmd,
+				Task:       ParseRemoteDanmuTask(r.Data.Uname, r.Data.Msg),
+			}
 		}
 		if wc.taskChan == nil {
 			continue

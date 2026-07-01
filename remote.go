@@ -1,5 +1,3 @@
-//go:build remote
-
 package main
 
 import (
@@ -15,7 +13,7 @@ func main() {
 		log.Println("cannot serve with empty BILIBILI_AK_ID or BILIBILI_AK_SECRET")
 		return
 	}
-	r := server.NewRemoteSignatory(akID, akSecret)
+	r := server.NewRemoteDanmuServer(akID, akSecret)
 	r.Register()
 	r.Spin()
 }

@@ -110,10 +110,10 @@ func (t *MaimaiTicketMaster) resolveIndex(operator string, index int64) (int64, 
 				return int64(i), nil
 			}
 		}
-		return -1, fmt.Errorf("%s 找不到错误", operator)
+		return -1, fmt.Errorf("找不到错误")
 	}
 	if !t.validIndex(index) {
-		return -1, fmt.Errorf("%s 下标错误", operator)
+		return -1, fmt.Errorf("下标错误")
 	}
 	return index, nil
 }
@@ -127,7 +127,7 @@ func (t *MaimaiTicketMaster) FinishTicket(operator string, index int64) (string,
 	}
 
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 	t.tickets = append(t.tickets[:index], t.tickets[index+1:]...)
 	err = t.saveCheckPoint()
@@ -147,7 +147,7 @@ func (t *MaimaiTicketMaster) NextRank(operator string, index int64) (string, err
 	}
 
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 
 	newTicket := &MaimaiTicket{
@@ -176,7 +176,7 @@ func (t *MaimaiTicketMaster) NextLevel(operator string, index int64) (string, er
 		return "", err
 	}
 	if !t.checkPermission(operator, index) {
-		return "", fmt.Errorf("%s 只能操作自己点的歌曲", operator)
+		return "", fmt.Errorf("只能操作自己点的歌曲")
 	}
 	t.tickets[index].RotateLevel()
 	err = t.saveCheckPoint()
@@ -251,7 +251,7 @@ func (t *MaimaiTicketMaster) AddTicket(creator string, keyword string) (string, 
 		return "", errors.New("歌单已满~")
 	}
 	if t.countTicketsByCreator(creator) >= maxTicketsPerCreator {
-		return "", fmt.Errorf("%s 每人限点%d首", creator, maxTicketsPerCreator)
+		return "", fmt.Errorf("每人限点%d首", maxTicketsPerCreator)
 	}
 	targetLevel := 0
 	if strings.HasSuffix(keyword, "紫") || strings.HasPrefix(keyword, "紫") {

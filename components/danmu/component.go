@@ -6,59 +6,74 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 	"wolfy/components"
 	"wolfy/components/danmu/bilibili"
-	servercomponent "wolfy/components/server"
 	"wolfy/model"
 )
 
 const (
 	DanmuComponentName = "danmu"
+	ParamRemoteBaseURL = "remote_base_url"
 	ParamAppID         = "app_id"
 	ParamAnchorCode    = "anchor_code"
-	ParamBilibiliAKID  = "bilibili_ak_id"
-	ParamBilibiliAKSec = "bilibili_ak_secret"
 
-	remoteSignatoryServer = "https://plusplus7.com:42376"
+	defaultRemoteDanmuServer = "https://plusplus7.com:42376"
+	defaultPollLimit         = 100
+	defaultPollWaitMS        = 1000
 )
+
+type RemoteDanmuClient interface {
+	StartGame(ctx context.Context, req bilibili.StartGameRequest) (*bilibili.StartGameResponse, error)
+	GetGame(ctx context.Context, anchorCode string) (*bilibili.StartGameResponse, error)
+	StopGame(ctx context.Context, anchorCode string, req bilibili.StopGameRequest) (*bilibili.StopGameResponse, error)
+	PullDanmu(ctx context.Context, anchorCode string, afterSeq int64, limit int, waitMS int) (*bilibili.PullDanmuResponse, error)
+}
+
+type RemoteDanmuClientFactory func(baseURL string) RemoteDanmuClient
 
 type DanmuComponent struct {
 	*components.BaseComponent
-	taskSink    chan<- *model.Task
-	messageSink chan<- string
-	cancel      context.CancelFunc
-	source      func() string
-	mu          sync.Mutex
+	taskSink      chan<- *model.Task
+	messageSink   chan<- string
+	cancel        context.CancelFunc
+	client        RemoteDanmuClient
+	clientFactory RemoteDanmuClientFactory
+	lastSeq       int64
+	mu            sync.Mutex
 }
 
 func NewDanmuComponent(taskSink chan<- *model.Task, messageSink chan<- string) *DanmuComponent {
 	return &DanmuComponent{
 		BaseComponent: components.NewBaseComponent(DanmuComponentName, []string{
+			ParamRemoteBaseURL,
 			ParamAppID,
 			ParamAnchorCode,
-			ParamBilibiliAKID,
-			ParamBilibiliAKSec,
 		}),
-		taskSink:    taskSink,
-		messageSink: messageSink,
+		taskSink:      taskSink,
+		messageSink:   messageSink,
+		clientFactory: func(baseURL string) RemoteDanmuClient { return bilibili.NewRemoteDanmuClient(baseURL) },
 	}
 }
 
-func (d *DanmuComponent) SetDanmuSourceFunc(source func() string) {
+func (d *DanmuComponent) SetRemoteClientFactory(factory RemoteDanmuClientFactory) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.source = source
+	if factory == nil {
+		d.clientFactory = func(baseURL string) RemoteDanmuClient { return bilibili.NewRemoteDanmuClient(baseURL) }
+		return
+	}
+	d.clientFactory = factory
 }
 
 func (d *DanmuComponent) Start(ctx context.Context) error {
-	if !d.active() {
-		_ = d.Stop(ctx)
-		d.SetStatus(components.StatusWaiting, errors.New("danmu source is not danmu"))
-		return nil
-	}
 	params := d.Params()
+	remoteBaseURL := params[ParamRemoteBaseURL]
 	appIDText := params[ParamAppID]
 	anchorCode := params[ParamAnchorCode]
+	if remoteBaseURL == "" {
+		remoteBaseURL = defaultRemoteDanmuServer
+	}
 	if appIDText == "" {
 		err := errors.New("app_id is empty")
 		d.SetStatus(components.StatusWaiting, err)
@@ -69,7 +84,7 @@ func (d *DanmuComponent) Start(ctx context.Context) error {
 		d.SetStatus(components.StatusWaiting, err)
 		return nil
 	}
-	appID, err := strconv.Atoi(appIDText)
+	appID, err := strconv.ParseInt(appIDText, 10, 64)
 	if err != nil {
 		d.SetStatus(components.StatusError, err)
 		return err
@@ -80,43 +95,51 @@ func (d *DanmuComponent) Start(ctx context.Context) error {
 		d.cancel()
 	}
 	runCtx, cancel := context.WithCancel(ctx)
+	client := d.clientFactory(remoteBaseURL)
 	d.cancel = cancel
+	d.client = client
 	d.mu.Unlock()
 
-	akID := params[ParamBilibiliAKID]
-	akSecret := params[ParamBilibiliAKSec]
-	var signatory bilibili.ISignatory
-	if akID != "" && akSecret != "" {
-		signatory = bilibili.NewLocalSignatory(akID, akSecret)
-	} else {
-		signatory = bilibili.NewRemoteSignatory(remoteSignatoryServer, anchorCode)
-	}
-	app := bilibili.NewAppService(int64(appID), anchorCode, signatory, d.messageSink)
-	app.SetEventRecorder(func(eventType components.ComponentEventType, codeLocation, message string) {
-		d.RecordEventAt(eventType, codeLocation, message)
-	})
 	d.SetStatus(components.StatusRestarting, nil)
-	go d.forwardTasks(runCtx, app)
-	return nil
-}
-
-func (d *DanmuComponent) active() bool {
-	d.mu.Lock()
-	source := d.source
-	d.mu.Unlock()
-	if source == nil {
-		return true
+	startResp, err := client.StartGame(runCtx, bilibili.StartGameRequest{
+		AppID:      appID,
+		AnchorCode: anchorCode,
+	})
+	if err != nil {
+		cancel()
+		d.SetStatus(components.StatusError, err)
+		d.RecordEvent(components.ComponentEventDanmuListenerFailed, err.Error())
+		return err
 	}
-	return source() == servercomponent.DanmuSourceDanmu
+	lastSeq := int64(0)
+	if startResp != nil {
+		lastSeq = startResp.Data.LastSeq
+	}
+	d.setLastSeq(lastSeq)
+	d.RecordEvent(components.ComponentEventDanmuListenerStarted, "remote danmu listener started")
+	d.SetStatus(components.StatusRunning, nil)
+	go d.pullLoop(runCtx, client, anchorCode)
+	return nil
 }
 
 func (d *DanmuComponent) Stop(ctx context.Context) error {
 	d.mu.Lock()
-	if d.cancel != nil {
-		d.cancel()
-		d.cancel = nil
-	}
+	cancel := d.cancel
+	client := d.client
+	anchorCode := d.Params()[ParamAnchorCode]
+	d.cancel = nil
+	d.client = nil
 	d.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if client != nil && anchorCode != "" {
+		_, err := client.StopGame(ctx, anchorCode, bilibili.StopGameRequest{Reason: "local stop"})
+		if err != nil && ctx.Err() == nil {
+			d.SetStatus(components.StatusError, err)
+			return err
+		}
+	}
 	d.SetStatus(components.StatusWaiting, nil)
 	return nil
 }
@@ -127,33 +150,100 @@ func (d *DanmuComponent) Restart(ctx context.Context) error {
 	return d.Start(ctx)
 }
 
-func (d *DanmuComponent) forwardTasks(ctx context.Context, app *bilibili.AppService) {
-	taskChan := app.Spin(ctx)
-	if taskChan == nil {
-		if ctx.Err() == nil {
-			d.RecordEvent(components.ComponentEventDanmuListenerFailed, "danmu listener failed to start")
-			d.SetStatus(components.StatusError, errors.New("danmu listener failed to start"))
-		}
-		return
+func (d *DanmuComponent) LastSeq() int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lastSeq
+}
+
+func (d *DanmuComponent) Config() (remoteBaseURL string, appID int64, anchorCode string) {
+	params := d.Params()
+	remoteBaseURL = params[ParamRemoteBaseURL]
+	if remoteBaseURL == "" {
+		remoteBaseURL = defaultRemoteDanmuServer
 	}
-	d.RecordEvent(components.ComponentEventDanmuListenerStarted, "danmu listener started")
-	d.SetStatus(components.StatusRunning, nil)
+	appID, _ = strconv.ParseInt(params[ParamAppID], 10, 64)
+	return remoteBaseURL, appID, params[ParamAnchorCode]
+}
+
+func (d *DanmuComponent) pullLoop(ctx context.Context, client RemoteDanmuClient, anchorCode string) {
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case task := <-taskChan:
-			if task == nil {
-				continue
+		afterSeq := d.LastSeq()
+		resp, err := client.PullDanmu(ctx, anchorCode, afterSeq, defaultPollLimit, defaultPollWaitMS)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
 			}
+			d.RecordEvent(components.ComponentEventDanmuListenerFailed, err.Error())
+			d.SetStatus(components.StatusError, err)
+			if !sleepWithContext(ctx, time.Second) {
+				return
+			}
+			continue
+		}
+		if resp == nil {
+			continue
+		}
+		if err := d.handleEvents(ctx, resp.Events); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			d.RecordEvent(components.ComponentEventDanmuListenerFailed, err.Error())
+			d.SetStatus(components.StatusError, err)
+			return
+		}
+		d.setLastSeq(resp.NextSeq)
+		if resp.HasMore {
+			continue
+		}
+	}
+}
+
+func (d *DanmuComponent) handleEvents(ctx context.Context, events []bilibili.DanmuEvent) error {
+	for _, event := range events {
+		d.RecordEvent(components.ComponentEventDanmuDanmuReceived, fmt.Sprintf("caller=%s message=%s", event.Caller, event.Message))
+		if d.messageSink != nil {
 			select {
 			case <-ctx.Done():
-				return
-			case d.taskSink <- task:
-				d.RecordEvent(components.ComponentEventDanmuTaskDelivered, describeTaskEvent(task))
+				return ctx.Err()
+			case d.messageSink <- formatDanmuMessage(event.Caller, event.Message):
 			}
 		}
+		if event.Task == nil {
+			continue
+		}
+		if d.taskSink == nil {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case d.taskSink <- event.Task:
+			d.RecordEvent(components.ComponentEventDanmuTaskDelivered, describeTaskEvent(event.Task))
+		}
 	}
+	return nil
+}
+
+func (d *DanmuComponent) setLastSeq(lastSeq int64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.lastSeq = lastSeq
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func formatDanmuMessage(caller, message string) string {
+	return "inf " + caller + " " + message
 }
 
 func describeTaskEvent(task *model.Task) string {
