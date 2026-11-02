@@ -17,7 +17,7 @@ import (
 const (
 	remoteDanmuDefaultLimit   = 100
 	remoteDanmuMaxLimit       = 500
-	remoteDanmuDefaultWaitMS  = 30000
+	remoteDanmuDefaultWaitMS  = 1000
 	remoteDanmuMaxWaitMS      = 30000
 	remoteDanmuBufferCapacity = 1024
 )
